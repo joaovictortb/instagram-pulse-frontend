@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: insights
+    // Document ID: {insightId}
+    // Fields:
+    //   - id: string (optional) - Unique identifier
+    //   - userId: string (required) - Owner's UID
+    //   - type: string (required, enum: ['dashboard', 'growth', 'content']) - Category
+    //   - content: string (required, max 5000 chars) - Markdown content
+    //   - createdAt: timestamp (required) - Generation time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidInsight(data) {
+      return hasRequiredFields(['userId', 'type', 'content', 'createdAt']) &&
+             hasOnlyAllowedFields(['id', 'userId', 'type', 'content', 'createdAt']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.type in ['dashboard', 'growth', 'content'] &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /insights/{insightId} {
+      // Users can only read their own insights
+      allow read: if isDocOwner();
+      
+      // Users can only create insights for themselves
+      allow create: if isAuthenticated() && isValidInsight(request.resource.data);
+      
+      // Insights are immutable for now
+      allow update: if false;
+      
+      // Users can delete their own insights
+      allow delete: if isDocOwner();
+    }
+
+    // Deny all other access
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
