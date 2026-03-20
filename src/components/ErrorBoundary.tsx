@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import React, { ErrorInfo, ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
@@ -9,7 +9,10 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
+export class ErrorBoundary extends React.Component<Props, State> {
+  // Workaround: em algumas configurações o TS não infere `this.props` corretamente.
+  // Declarar explicitamente evita erro em `render()`.
+  public props!: Props;
   public state: State = {
     hasError: false,
     error: null
@@ -25,20 +28,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public render() {
     if (this.state.hasError) {
-      let errorMessage = "Ocorreu um erro inesperado.";
-      
-      try {
-        // Check if it's a Firestore error JSON
-        const firestoreError = JSON.parse(this.state.error?.message || "");
-        if (firestoreError.operationType) {
-          errorMessage = `Erro no banco de dados: ${firestoreError.error}. Operação: ${firestoreError.operationType}`;
-        }
-      } catch (e) {
-        // Not a JSON error, use the message directly if it's simple
-        if (this.state.error?.message && this.state.error.message.length < 100) {
-          errorMessage = this.state.error.message;
-        }
-      }
+      const errorMessage = this.state.error?.message && this.state.error.message.length < 200
+        ? this.state.error.message
+        : "Ocorreu um erro inesperado.";
 
       return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-dashboard-bg p-4 text-center">

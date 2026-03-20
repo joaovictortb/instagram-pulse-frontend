@@ -1,0 +1,25 @@
+---
+description: Ler documentação do repo antes de alterar; evitar comandos de terminal desnecessários
+alwaysApply: true
+---
+
+# InstaPulse — contexto antes de mudar código
+
+## Documentação (ler quando for mexer no projeto)
+
+Antes de alterações relevantes (API, env, Vite, proxy, Supabase, Meta), lê pelo menos:
+
+- `docs/DEV-SETUP.md` — como API + front funcionam, `.env` na raiz vs `api/.env`, ordem de carregamento, `yarn api` + `yarn dev`.
+- `docs/API-E-FRONTEND.md` — separação front/API, proxy, variáveis.
+- `.env.example` na raiz — nomes das variáveis (nunca expor secrets em `VITE_*`).
+
+Se a mudança for só UI numa página, podes limitar-te ao ficheiro; se tocar em `api/`, `vite.config`, `.env` ou `src/lib/api.ts`, **consulta os docs acima**.
+
+## Terminal / lint
+
+- **Não** executar `yarn lint`, `tsc` ou testes no terminal por rotina só para “confirmar” — isso pede confirmação ao utilizador no Cursor e incomoda.
+- Preferir `read_lints` nos ficheiros editados; se precisar de typecheck completo, **sugerir no texto** para o utilizador correr `yarn lint` localmente, em vez de invocar o terminal automaticamente.
+
+## Idioma
+
+Responder ao utilizador em **português** (pt-BR).

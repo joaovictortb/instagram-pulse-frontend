@@ -16,18 +16,21 @@ import {
 import { useState } from "react";
 import { formatNumber } from "@/src/lib/utils";
 import { motion } from "motion/react";
+import { apiFetch, readJsonBody } from "@/src/lib/api";
 
 export default function ContentPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const { data: account } = useQuery({
     queryKey: ['instagram-account'],
-    queryFn: () => fetch('/api/instagram/account').then(res => res.json()),
+    queryFn: async () =>
+      readJsonBody(await apiFetch("/api/instagram/account")),
   });
 
   const { data: media, isLoading } = useQuery({
     queryKey: ['instagram-media'],
-    queryFn: () => fetch('/api/instagram/media').then(res => res.json()),
+    queryFn: async () =>
+      readJsonBody(await apiFetch("/api/instagram/media")),
   });
 
   const calculateER = (likes: number, comments: number) => {

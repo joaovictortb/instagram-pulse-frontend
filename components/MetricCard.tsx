@@ -2,12 +2,13 @@
 
 import { cn, formatNumber } from "@/src/lib/utils";
 import { TrendingUp, TrendingDown } from "lucide-react";
+import type { ElementType } from "react";
 
 interface MetricCardProps {
   title: string;
   value: string | number;
   trend?: number;
-  icon: React.ElementType;
+  icon: ElementType;
   description?: string;
 }
 

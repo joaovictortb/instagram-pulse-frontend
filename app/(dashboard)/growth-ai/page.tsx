@@ -1,120 +1,82 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, BrainCircuit, Target, Zap, ArrowRight, Lightbulb, History, Trash2 } from "lucide-react";
-import { motion } from "motion/react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { Sparkles, BrainCircuit, Target, Zap, ArrowRight, Lightbulb, History, Trash2, CalendarRange } from "lucide-react";
+import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/src/lib/utils";
-import { db, handleFirestoreError, OperationType } from "@/src/firebase";
-import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc, doc, serverTimestamp, Timestamp } from "firebase/firestore";
-import { useAuth } from "@/src/components/FirebaseProvider";
-import { useEffect, useState } from "react";
+import { useState, useCallback } from "react";
+import { useUIStore } from "@/src/store/ui";
+import { apiFetch, readJsonBody } from "@/src/lib/api";
 
 interface AIInsightDoc {
   id: string;
   content: string;
   type: string;
-  createdAt: Timestamp;
+  createdAt: Date;
 }
 
 export default function GrowthAIPage() {
-  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [history, setHistory] = useState<AIInsightDoc[]>([]);
 
-  const { data: account } = useQuery({
-    queryKey: ['instagram-account'],
-    queryFn: () => fetch('/api/instagram/account').then(res => res.json()),
-  });
+  const { dateRange } = useUIStore();
+  const fromStr = dateRange.from.toISOString().slice(0, 10);
+  const toStr = dateRange.to.toISOString().slice(0, 10);
+  const cacheQueryKey = ["ai-report-cached", "growth", fromStr, toStr];
 
-  const { data: media } = useQuery({
-    queryKey: ['instagram-media'],
-    queryFn: () => fetch('/api/instagram/media').then(res => res.json()),
-  });
+  const addToHistory = useCallback((content: string) => {
+    setHistory(prev => [{
+      id: crypto.randomUUID(),
+      content,
+      type: 'growth',
+      createdAt: new Date(),
+    }, ...prev]);
+  }, []);
 
-  const { data: insights } = useQuery({
-    queryKey: ['instagram-insights'],
-    queryFn: () => fetch('/api/instagram/insights').then(res => res.json()),
-  });
+  const removeFromHistory = useCallback((id: string) => {
+    setHistory(prev => prev.filter(item => item.id !== id));
+  }, []);
 
-  // Listen to history from Firestore
-  useEffect(() => {
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'insights'),
-      where('userId', '==', user.uid),
-      where('type', '==', 'growth'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as AIInsightDoc[];
-      setHistory(docs);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'insights');
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  const saveInsightMutation = useMutation({
-    mutationFn: async (content: string) => {
-      if (!user) return;
-      const path = 'insights';
-      try {
-        await addDoc(collection(db, path), {
-          userId: user.uid,
-          type: 'growth',
-          content,
-          createdAt: serverTimestamp(),
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, path);
-      }
-    }
-  });
-
-  const deleteInsightMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const path = `insights/${id}`;
-      try {
-        await deleteDoc(doc(db, 'insights', id));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, path);
-      }
-    }
-  });
-
-  const { data: aiInsights, isLoading, isFetching } = useQuery({
-    queryKey: ['ai-growth-insights'],
+  const { data: cachedReport, isLoading: loadingCache } = useQuery({
+    queryKey: cacheQueryKey,
     queryFn: async () => {
-      const res = await fetch('/api/ai', {
-        method: 'POST',
-        body: JSON.stringify({ 
-          type: 'summary', 
-          data: { 
-            context: 'growth_strategy',
-            account, 
-            media, 
-            insights 
-          } 
+      const res = await apiFetch(
+        `/api/ai/report/cached?reportType=growth&from=${fromStr}&to=${toStr}`,
+      );
+      const j = await readJsonBody<{ error?: string }>(res);
+      if (!res.ok)
+        throw new Error((j as { error?: string })?.error || "Erro ao ler cache");
+      return j as {
+        ok: boolean;
+        cached: boolean;
+        reportMarkdown?: string;
+        created_at?: string;
+      };
+    },
+    staleTime: 5 * 60_000,
+  });
+
+  const generateReportMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch("/api/ai/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reportType: "growth",
+          from: fromStr,
+          to: toStr,
         }),
       });
-      const data = await res.json();
-      
-      // Save to history if we got a result
-      if (data.result) {
-        saveInsightMutation.mutate(data.result);
-      }
-      
-      return data;
+      const data = await readJsonBody<{ error?: string }>(res);
+      if (!res.ok)
+        throw new Error((data as { error?: string })?.error || "Falha ao gerar relatório");
+      return data as { reportMarkdown?: string };
     },
-    enabled: !!account && !!media && !!insights,
-    staleTime: Infinity, // Don't refetch automatically
+    onSuccess: (data) => {
+      if (data.reportMarkdown) addToHistory(data.reportMarkdown);
+      void queryClient.invalidateQueries({ queryKey: cacheQueryKey });
+    },
   });
 
   return (
@@ -125,7 +87,7 @@ export default function GrowthAIPage() {
         </div>
         <div>
           <h2 className="text-3xl font-bold">Inteligência de Crescimento IA</h2>
-          <p className="text-zinc-500">Insights preditivos e recomendações estratégicas alimentadas pelo Gemini.</p>
+          <p className="text-zinc-500">Insights preditivos e recomendações estratégicas alimentadas por OpenAI.</p>
         </div>
       </div>
 
@@ -133,21 +95,31 @@ export default function GrowthAIPage() {
         {/* Main Strategy Panel */}
         <div className="lg:col-span-2 space-y-8">
           <div className="glass-card p-8 border-brand-primary/20 bg-gradient-to-br from-brand-primary/5 to-transparent">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-2 text-brand-primary">
                 <Sparkles size={20} />
                 <h3 className="text-xl font-bold uppercase tracking-widest">Diagnóstico Estratégico</h3>
               </div>
-              <button 
-                onClick={() => queryClient.invalidateQueries({ queryKey: ['ai-growth-insights'] })}
-                disabled={isFetching}
-                className="text-xs font-bold text-brand-primary hover:underline disabled:opacity-50"
-              >
-                {isFetching ? "GERANDO..." : "GERAR NOVA ANÁLISE"}
-              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                <Link
+                  to="/growth-plan"
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold hover:bg-emerald-500/25 transition-colors"
+                >
+                  <CalendarRange size={16} />
+                  Plano 7 dias
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => generateReportMutation.mutate()}
+                  disabled={generateReportMutation.isPending}
+                  className="text-xs font-bold text-brand-primary hover:underline disabled:opacity-50"
+                >
+                  {generateReportMutation.isPending ? "GERANDO…" : "GERAR NOVA ANÁLISE"}
+                </button>
+              </div>
             </div>
             <div className="prose prose-invert max-w-none text-zinc-300 leading-relaxed text-lg">
-              {isLoading || isFetching ? (
+              {loadingCache || generateReportMutation.isPending ? (
                 <div className="space-y-4">
                   <div className="h-4 bg-zinc-800 rounded w-full animate-pulse" />
                   <div className="h-4 bg-zinc-800 rounded w-5/6 animate-pulse" />
@@ -156,7 +128,9 @@ export default function GrowthAIPage() {
               ) : (
                 <div className="markdown-body">
                   <ReactMarkdown>
-                    {aiInsights?.result || history[0]?.content || "Analisando sua conta para gerar estratégias personalizadas..."}
+                    {cachedReport?.reportMarkdown ||
+                      history[0]?.content ||
+                      "Clique em GERAR NOVA ANÁLISE para usar a OpenAI (cada clique gera custo). Relatórios ficam salvos no Supabase para este período."}
                   </ReactMarkdown>
                 </div>
               )}
@@ -207,14 +181,14 @@ export default function GrowthAIPage() {
                   <div key={item.id} className="glass-card p-4 flex justify-between items-start gap-4">
                     <div className="flex-1 overflow-hidden">
                       <p className="text-xs text-zinc-500 mb-2">
-                        {item.createdAt?.toDate().toLocaleString('pt-BR')}
+                        {item.createdAt?.toLocaleString('pt-BR')}
                       </p>
                       <div className="text-sm text-zinc-400 line-clamp-2 prose prose-invert prose-sm">
                         <ReactMarkdown>{item.content}</ReactMarkdown>
                       </div>
                     </div>
                     <button 
-                      onClick={() => deleteInsightMutation.mutate(item.id)}
+                      onClick={() => removeFromHistory(item.id)}
                       className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
                     >
                       <Trash2 size={16} />

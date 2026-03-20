@@ -1,14 +1,24 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap");
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --color-brand-primary: #E1306C;
-  --color-brand-secondary: #F77737;
-  --color-brand-accent: #833AB4;
-  
-  --color-dashboard-bg: #09090B;
-  --color-dashboard-card: #18181B;
-  --color-dashboard-border: #27272A;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Playfair Display", serif;
+  --color-brand-primary: #e1306c;
+  --color-brand-secondary: #f77737;
+  --color-brand-accent: #833ab4;
+
+  --color-dashboard-bg: #09090b;
+  --color-dashboard-card: #18181b;
+  --color-dashboard-border: #27272a;
+
+  /* NFL Studio (editor de posts) */
+  --color-nfl-blue: #013369;
+  --color-nfl-red: #d50a0a;
+  --color-espn-red: #cc0000;
+  --animate-glow: glow 2s ease-in-out infinite alternate;
 }
 
 @layer base {
@@ -23,4 +33,72 @@
 
 .gradient-text {
   @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-accent via-brand-primary to-brand-secondary;
+}
+
+/* —— NFL Studio (src/studio) —— */
+@keyframes glow {
+  from {
+    box-shadow:
+      0 0 5px rgba(213, 10, 10, 0.2),
+      0 0 10px rgba(213, 10, 10, 0.2);
+  }
+  to {
+    box-shadow:
+      0 0 20px rgba(213, 10, 10, 0.6),
+      0 0 30px rgba(213, 10, 10, 0.4);
+  }
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+.animate-scan {
+  animation: scan 3s linear infinite;
+}
+
+.sports-grid {
+  background-image: radial-gradient(
+    circle at 2px 2px,
+    rgba(255, 255, 255, 0.05) 1px,
+    transparent 0
+  );
+  background-size: 40px 40px;
+}
+
+.text-stroke {
+  -webkit-text-stroke: 1px rgba(255, 255, 255, 0.3);
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.35) rgba(255, 255, 255, 0.08);
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.6);
 }
