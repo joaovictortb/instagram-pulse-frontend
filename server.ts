@@ -111,24 +111,6 @@ async function startServer() {
     }
   });
 
-  // In production, we serve static files from the dist directory
-  if (process.env.NODE_ENV === "production") {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    
-    // For SPA, redirect all requests to index.html
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  } else {
-    // In development, we use Vite's middleware
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  }
-
   app.post("/api/ai/orchestrator", async (req, res) => {
     try {
       const { instagramService } = await import("./src/services/instagram");
@@ -159,6 +141,24 @@ async function startServer() {
       res.status(500).json({ error: error.message });
     }
   });
+
+  // In production, we serve static files from the dist directory
+  if (process.env.NODE_ENV === "production") {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    
+    // For SPA, redirect all requests to index.html
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  } else {
+    // In development, we use Vite's middleware
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  }
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);

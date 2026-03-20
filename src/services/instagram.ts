@@ -35,16 +35,33 @@ export const instagramService = {
   },
 
   async getMediaInsights(mediaId: string): Promise<any> {
-    const { data } = await api.get(`/${mediaId}/insights`, {
-      params: {
-        metric: 'views,reach,engagement,saved',
-      },
-    });
-    return data.data.reduce((acc: any, curr: any) => {
-      const name = curr.name === 'views' ? 'impressions' : curr.name;
-      acc[name] = curr.values[0].value;
-      return acc;
-    }, {});
+    try {
+      const { data } = await api.get(`/${mediaId}/insights`, {
+        params: {
+          metric: 'impressions,reach,engagement,saved',
+        },
+      });
+      return data.data.reduce((acc: any, curr: any) => {
+        acc[curr.name] = curr.values[0].value;
+        return acc;
+      }, {});
+    } catch (error) {
+      // Fallback for Reels which use 'plays' or 'views' instead of 'impressions'
+      try {
+        const { data } = await api.get(`/${mediaId}/insights`, {
+          params: {
+            metric: 'plays,reach,total_interactions',
+          },
+        });
+        return data.data.reduce((acc: any, curr: any) => {
+          const name = curr.name === 'plays' ? 'impressions' : curr.name;
+          acc[name] = curr.values[0].value;
+          return acc;
+        }, {});
+      } catch (e) {
+        return { impressions: 0, reach: 0, engagement: 0, saved: 0 };
+      }
+    }
   },
 
   async getAccountInsights(period = 'day'): Promise<any> {
@@ -53,36 +70,35 @@ export const instagramService = {
     // Align to day boundaries (midnight) as required by Meta API
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    const until = Math.floor(now.getTime() / 1000);
+    // Use yesterday as 'until' to ensure complete data
+    const until = Math.floor(now.getTime() / 1000) - (24 * 60 * 60);
     const since = until - (28 * 24 * 60 * 60);
 
     const metrics = [
-      { name: 'views', type: 'total_value' },
-      { name: 'reach', type: null },
-      { name: 'profile_views', type: 'total_value' },
-      { name: 'website_clicks', type: 'total_value' },
-      { name: 'follower_count', type: null }
+      'impressions',
+      'reach',
+      'profile_views',
+      'website_clicks',
+      'follower_count'
     ];
 
-    const results = await Promise.all(metrics.map(async (m) => {
+    const results = await Promise.all(metrics.map(async (metricName) => {
       try {
-        const params: any = {
-          metric: m.name,
-          period,
-          since,
-          until,
-        };
-        if (m.type) params.metric_type = m.type;
-
-        const { data } = await api.get(`/${BUSINESS_ID}/insights`, { params });
+        const { data } = await api.get(`/${BUSINESS_ID}/insights`, {
+          params: {
+            metric: metricName,
+            period,
+            since,
+            until,
+          }
+        });
         return data.data;
       } catch (error: any) {
         const metaError = error.response?.data?.error;
-        // Specific warning for missing insights permission
-        if (metaError?.type === 'OAuthException' && metaError?.code === 10) {
-          console.error(`CRITICAL: Missing 'instagram_manage_insights' permission for metric ${m.name}`);
-        } else {
-          console.error(`Error fetching metric ${m.name}:`, metaError?.message || error.message);
+        console.error(`Error fetching metric ${metricName}:`, metaError?.message || error.message);
+        
+        if (metaError?.code === 10 || metaError?.message?.includes('permission')) {
+          console.error(`CRITICAL: Missing 'instagram_manage_insights' permission for account metrics.`);
         }
         return [];
       }
@@ -93,7 +109,7 @@ export const instagramService = {
     const processed = allData.reduce((acc: any, curr: any) => {
       if (!curr || !curr.name || !curr.values) return acc;
       
-      const metricName = curr.name === 'views' ? 'impressions' : curr.name;
+      const metricName = curr.name;
       
       acc[metricName] = curr.values.reduce((sum: number, v: any) => sum + (v.value || 0), 0);
       
