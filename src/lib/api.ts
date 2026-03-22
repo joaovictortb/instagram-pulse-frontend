@@ -6,9 +6,23 @@
  */
 const raw = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 
+let getAccessToken: (() => string | null) | null = null;
+
+/** Chamado pelo AuthProvider com o access_token da sessão Supabase. */
+export function setApiAuthTokenGetter(fn: () => string | null) {
+  getAccessToken = fn;
+}
+
 /** Mensagem quando o servidor devolve index.html ou 404 HTML em vez de JSON. */
 export const API_HTML_RESPONSE_HINT =
-  "Resposta HTML em vez de JSON: em dev liga `yarn api` + `yarn dev` na raiz, `VITE_API_BASE_URL` vazio, e confere o proxy. Ver docs/DEV-SETUP.md.";
+  "Resposta HTML em vez de JSON: em dev precisas da API a correr e do Vite com proxy. Na raiz do repo: `yarn api` (terminal 1) e `yarn dev` (terminal 2). Em `frontend/.env` deixa `VITE_API_BASE_URL` vazio e `VITE_API_PROXY_TARGET` igual à porta da API (ex. http://localhost:3000). Ver docs/DEV-SETUP.md.";
+
+/** Dica extra quando o build de produção ainda chama `/api` no domínio do frontend (Vercel). */
+function productionApiHint(): string {
+  if (import.meta.env.DEV) return "";
+  if (raw) return "";
+  return " Em produção (ex.: Vercel) define `VITE_API_BASE_URL` com a URL HTTPS da tua API (Railway, Render, Fly, etc.) — o site estático não tem `/api`.";
+}
 
 export function getApiBaseUrl(): string {
   return raw;
@@ -23,7 +37,23 @@ export function apiUrl(path: string): string {
 
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const url = input.startsWith("http") ? input : apiUrl(input);
-  return fetch(url, init);
+  const headers = new Headers(init?.headers);
+  const token = getAccessToken?.() ?? null;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  // Conta Instagram ativa (multi-ligação) — evita import circular com o store
+  try {
+    const raw = localStorage.getItem("instapulse-ig-connection");
+    if (raw) {
+      const parsed = JSON.parse(raw) as {
+        state?: { activeConnectionId?: string | null };
+      };
+      const cid = parsed?.state?.activeConnectionId;
+      if (cid) headers.set("X-Instagram-Connection-Id", cid);
+    }
+  } catch {
+    /* ignore */
+  }
+  return fetch(url, { ...init, headers });
 }
 
 /**
@@ -39,7 +69,7 @@ export async function readJsonBody<T = any>(res: Response): Promise<T> {
     trimmed.startsWith("<html") ||
     (trimmed.startsWith("<") && !trimmed.startsWith("{") && !trimmed.startsWith("["))
   ) {
-    throw new Error(API_HTML_RESPONSE_HINT);
+    throw new Error(API_HTML_RESPONSE_HINT + productionApiHint());
   }
   try {
     return JSON.parse(text) as T;

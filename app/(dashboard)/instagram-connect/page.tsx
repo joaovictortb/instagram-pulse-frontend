@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Instagram,
@@ -11,9 +11,12 @@ import {
   RefreshCw,
   KeyRound,
   Hash,
+  Download,
 } from "lucide-react";
 import { apiFetch, readJsonBody } from "@/src/lib/api";
 import { useUIStore } from "@/src/store/ui";
+import { useAuth } from "@/src/components/AuthProvider";
+import { useInstagramConnectionStore } from "@/src/store/instagramConnection";
 
 type ConnectionGet = {
   ok?: boolean;
@@ -34,7 +37,25 @@ type ConnectionPost = {
   name?: string;
 };
 
+type MeSessionInfo = {
+  ok?: boolean;
+  encryptionConfigured?: boolean;
+  connectionCount?: number;
+  tokenExpiresSoon?: boolean;
+};
+
+type MeConnectionsGet = {
+  ok?: boolean;
+  connections?: Array<{
+    id: string;
+    instagram_business_account_id: string;
+    token_expires_at: string | null;
+    updated_at: string;
+  }>;
+};
+
 export default function InstagramConnectPage() {
+  const { session } = useAuth();
   const queryClient = useQueryClient();
   const { dateRange } = useUIStore();
   const fromStr = dateRange.from.toISOString().slice(0, 10);
@@ -42,8 +63,19 @@ export default function InstagramConnectPage() {
 
   const [token, setToken] = useState("");
   const [businessId, setBusinessId] = useState("");
+  const activeConnectionId = useInstagramConnectionStore(
+    (s) => s.activeConnectionId,
+  );
+  const setActiveConnectionId = useInstagramConnectionStore(
+    (s) => s.setActiveConnectionId,
+  );
 
-  const { data: status, isLoading, refetch, isFetching } = useQuery({
+  const {
+    data: status,
+    isLoading,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ["instagram-connection"],
     queryFn: async () => {
       const res = await apiFetch("/api/instagram/connection");
@@ -51,15 +83,37 @@ export default function InstagramConnectPage() {
     },
   });
 
+  const { data: meInfo, isLoading: meInfoLoading } = useQuery({
+    queryKey: ["me-session-info"],
+    enabled: !!session,
+    queryFn: async () => {
+      const res = await apiFetch("/api/me/session-info");
+      return readJsonBody<MeSessionInfo>(res);
+    },
+  });
+
+  const { data: meConnections } = useQuery({
+    queryKey: ["me-instagram-connections"],
+    enabled: !!session,
+    queryFn: async () => {
+      const res = await apiFetch("/api/me/instagram-connections");
+      return readJsonBody<MeConnectionsGet>(res);
+    },
+  });
+
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiFetch("/api/instagram/connection", {
+      const body = {
+        metaAccessToken: token.trim(),
+        instagramBusinessAccountId: businessId.trim(),
+      };
+      const path = session
+        ? "/api/me/instagram-connections"
+        : "/api/instagram/connection";
+      const res = await apiFetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          metaAccessToken: token.trim(),
-          instagramBusinessAccountId: businessId.trim(),
-        }),
+        body: JSON.stringify(body),
       });
       const data = await readJsonBody<ConnectionPost>(res);
       if (!res.ok) throw new Error(data.error || "Falha ao guardar");
@@ -67,16 +121,22 @@ export default function InstagramConnectPage() {
     },
     onSuccess: () => {
       setToken("");
+      void queryClient.invalidateQueries({ queryKey: ["me-session-info"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["me-instagram-connections"],
+      });
       void invalidateAll();
     },
   });
 
   const syncMutation = useMutation({
     mutationFn: async () => {
+      const body: Record<string, string> = { from: fromStr, to: toStr };
+      if (activeConnectionId) body.connectionId = activeConnectionId;
       const res = await apiFetch("/api/sync/instagram", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: fromStr, to: toStr }),
+        body: JSON.stringify(body),
       });
       const data = await readJsonBody(res);
       if (!res.ok)
@@ -90,6 +150,10 @@ export default function InstagramConnectPage() {
 
   async function invalidateAll() {
     await queryClient.invalidateQueries({ queryKey: ["instagram-connection"] });
+    await queryClient.invalidateQueries({ queryKey: ["me-session-info"] });
+    await queryClient.invalidateQueries({
+      queryKey: ["me-instagram-connections"],
+    });
     await queryClient.invalidateQueries({ queryKey: ["api-health"] });
     await queryClient.invalidateQueries({ queryKey: ["instagram-account"] });
     await queryClient.invalidateQueries({ queryKey: ["instagram-media"] });
@@ -114,22 +178,76 @@ export default function InstagramConnectPage() {
   const partialError =
     status?.hasCredentials && !status?.configured && status?.validationError;
 
+  /** Com sessão, só permite guardar depois de saber que ENCRYPTION_KEY existe na API. */
+  const encryptionReady =
+    !session || (!meInfoLoading && meInfo?.encryptionConfigured === true);
+  const needsEncryptionOnServer =
+    !!session && !meInfoLoading && meInfo?.encryptionConfigured === false;
+
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
+    <div className="mx-auto space-y-8">
+      {session && meInfo?.tokenExpiresSoon && (
+        <div
+          className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"
+          role="status"
+        >
+          <p className="font-medium">Token Meta / Instagram a expirar</p>
+          <p className="mt-1 text-rose-200/90">
+            Pelo menos uma ligação tem{" "}
+            <code className="text-xs">token_expires_at</code> nos próximos 7
+            dias. Gera um token novo na Meta ou usa &quot;Ligar com Meta&quot;
+            abaixo.
+          </p>
+        </div>
+      )}
+
+      {needsEncryptionOnServer && (
+        <div
+          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+          role="status"
+        >
+          <p className="font-medium">Falta ENCRYPTION_KEY na API</p>
+          <p className="mt-1 text-amber-200/90">
+            No ficheiro <code className="text-xs">api/.env</code> (ou{" "}
+            <code className="text-xs">.env</code> na raiz), define{" "}
+            <code className="rounded bg-black/30 px-1">ENCRYPTION_KEY</code> com
+            uma string longa (ex.:{" "}
+            <code className="text-xs">
+              node -e
+              &quot;console.log(require(&apos;crypto&apos;).randomBytes(32).toString(&apos;hex&apos;))&quot;
+            </code>
+            ) e reinicia o servidor da API. Sem isto não é possível guardar o
+            token com sessão.
+          </p>
+        </div>
+      )}
+
       <div>
         <h2 className="text-2xl font-bold flex items-center gap-2">
           <Instagram className="text-brand-primary" size={28} />
           Conexão Instagram
         </h2>
         <p className="text-zinc-500 text-sm mt-1">
-          Liga a Graph API da Meta com o token de acesso e o ID da conta Instagram
-          Business. Os dados são gravados em{" "}
-          <code className="text-xs bg-zinc-800 px-1 rounded">
-            api/.instagram-runtime.json
-          </code>{" "}
-          (local, não versionado no Git) e aplicados de imediato — não precisas de editar
-          manualmente o <code className="text-xs bg-zinc-800 px-1 rounded">.env</code>{" "}
-          para desenvolvimento local.
+          Liga a Graph API da Meta com o token de acesso e o ID da conta
+          Instagram Business.{" "}
+          {session ? (
+            <>
+              Com sessão ativa, as credenciais são gravadas no Supabase (token
+              encriptado na API com{" "}
+              <code className="text-xs bg-zinc-800 px-1 rounded">
+                ENCRYPTION_KEY
+              </code>
+              ).
+            </>
+          ) : (
+            <>
+              Sem sessão, os dados são gravados em{" "}
+              <code className="text-xs bg-zinc-800 px-1 rounded">
+                api/.instagram-runtime.json
+              </code>{" "}
+              (local) e aplicados de imediato.
+            </>
+          )}
         </p>
       </div>
 
@@ -137,7 +255,9 @@ export default function InstagramConnectPage() {
         <p className="text-sm text-zinc-400">
           Precisas de um token com permissões de{" "}
           <code className="text-xs text-zinc-300">instagram_basic</code>,{" "}
-          <code className="text-xs text-zinc-300">instagram_manage_insights</code>{" "}
+          <code className="text-xs text-zinc-300">
+            instagram_manage_insights
+          </code>{" "}
           (e páginas ligadas). O ID é o Instagram Business Account ID (número),
           não o @username.
         </p>
@@ -170,12 +290,14 @@ export default function InstagramConnectPage() {
         </h3>
         {isLoading ? (
           <div className="flex items-center gap-2 text-zinc-400">
-            <Loader2 className="animate-spin" size={18} />
-            A verificar…
+            <Loader2 className="animate-spin" size={18} />A verificar…
           </div>
         ) : connected ? (
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="text-emerald-400 shrink-0 mt-0.5" size={22} />
+            <CheckCircle2
+              className="text-emerald-400 shrink-0 mt-0.5"
+              size={22}
+            />
             <div>
               <p className="text-zinc-100 font-medium">
                 Ligado como @{status?.username}
@@ -189,7 +311,10 @@ export default function InstagramConnectPage() {
         ) : (
           <div className="space-y-2">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="text-amber-400 shrink-0 mt-0.5" size={22} />
+              <AlertTriangle
+                className="text-amber-400 shrink-0 mt-0.5"
+                size={22}
+              />
               <div>
                 <p className="text-zinc-300">
                   {partialError
@@ -206,6 +331,66 @@ export default function InstagramConnectPage() {
           </div>
         )}
       </div>
+
+      {session && (meConnections?.connections?.length ?? 0) > 0 && (
+        <div className="glass-card p-6 border border-dashboard-border/80 space-y-3">
+          <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500">
+            Conta ativa (Supabase)
+          </h3>
+          <p className="text-xs text-zinc-500">
+            Com várias ligações, escolhe qual usar nos gráficos e no sync. O
+            pedido envia o header{" "}
+            <code className="text-[10px]">X-Instagram-Connection-Id</code>.
+          </p>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-zinc-400">Instagram Business ID</span>
+            <select
+              value={activeConnectionId ?? ""}
+              onChange={(e) =>
+                setActiveConnectionId(e.target.value || null)
+              }
+              className="w-full bg-zinc-900 border border-dashboard-border rounded-xl px-3 py-2.5 text-sm font-mono outline-none focus:ring-1 ring-brand-primary"
+            >
+              {(meConnections?.connections ?? []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.instagram_business_account_id}
+                  {c.token_expires_at
+                    ? ` · expira ${new Date(c.token_expires_at).toLocaleDateString()}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={!encryptionReady}
+            onClick={async () => {
+              try {
+                const res = await apiFetch("/api/me/meta-oauth/url");
+                const data = await readJsonBody<{
+                  ok?: boolean;
+                  url?: string;
+                  error?: string;
+                }>(res);
+                if (!res.ok || !data.url) {
+                  throw new Error(
+                    data.error || "Não foi possível obter URL OAuth",
+                  );
+                }
+                window.location.href = data.url;
+              } catch (e: unknown) {
+                window.alert(
+                  e instanceof Error ? e.message : "Erro ao iniciar OAuth Meta",
+                );
+              }
+            }}
+            className="inline-flex items-center gap-2 text-sm text-brand-primary hover:underline disabled:opacity-50"
+          >
+            Ligar com Meta (OAuth)
+            <ExternalLink size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Formulário */}
       <form
@@ -265,14 +450,17 @@ export default function InstagramConnectPage() {
           <button
             type="submit"
             disabled={
-              saveMutation.isPending || !token.trim() || !businessId.trim()
+              saveMutation.isPending ||
+              !token.trim() ||
+              !businessId.trim() ||
+              !encryptionReady
             }
             className="px-5 py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary/90 disabled:opacity-50 text-white text-sm font-semibold transition-colors"
           >
             {saveMutation.isPending ? (
               <>
-                <Loader2 className="inline animate-spin mr-2" size={16} />
-                A validar…
+                <Loader2 className="inline animate-spin mr-2" size={16} />A
+                validar…
               </>
             ) : (
               "Guardar e validar"
@@ -315,6 +503,50 @@ export default function InstagramConnectPage() {
               <RefreshCw size={18} />
             )}
             Recarregar dados
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const path = `/api/metrics/kpis/export.csv?from=${encodeURIComponent(fromStr)}&to=${encodeURIComponent(toStr)}`;
+              const res = await apiFetch(path);
+              if (!res.ok) {
+                const t = await res.text();
+                throw new Error(t || "Falha ao exportar CSV");
+              }
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `kpis-${fromStr}-${toStr}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold border border-dashboard-border"
+          >
+            <Download size={18} />
+            Exportar CSV (KPIs)
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const path = `/api/metrics/kpis/export.pdf?from=${encodeURIComponent(fromStr)}&to=${encodeURIComponent(toStr)}`;
+              const res = await apiFetch(path);
+              if (!res.ok) {
+                const t = await res.text();
+                throw new Error(t || "Falha ao exportar PDF");
+              }
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `kpis-${fromStr}-${toStr}.pdf`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold border border-dashboard-border"
+          >
+            <Download size={18} />
+            Exportar PDF (KPIs)
           </button>
         </div>
         {syncMutation.isError && (

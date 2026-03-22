@@ -1,6 +1,6 @@
 "use client";
 
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/src/lib/utils";
 import {
   LayoutDashboard,
@@ -17,6 +17,7 @@ import {
   CalendarRange,
   Clapperboard,
   Instagram,
+  Youtube,
   type LucideIcon,
 } from "lucide-react";
 import { useUIStore } from "@/src/store/ui";
@@ -52,6 +53,11 @@ const NAV_GROUPS: { id: string; label: string; items: NavItem[] }[] = [
       { name: "Orquestrador", href: "/orchestrator", icon: Cpu },
       { name: "Studio", href: "/studio", icon: Clapperboard },
       { name: "Instagram", href: "/instagram-connect", icon: Instagram },
+      {
+        name: "YouTube → IG",
+        href: "/youtube-import",
+        icon: Youtube,
+      },
     ],
   },
   {
@@ -66,9 +72,19 @@ const SIDEBAR_COLLAPSED = 80;
 
 export function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const pathname = location.pathname;
   const { isSidebarOpen, toggleSidebar } = useUIStore();
-  const { user, logout } = useAuth();
+  const { displayName, photoURL, logout } = useAuth();
+
+  async function handleLogout() {
+    try {
+      await logout();
+      navigate("/login", { replace: true });
+    } catch (e) {
+      console.error("[auth] logout", e);
+    }
+  }
 
   return (
     <motion.aside
@@ -104,7 +120,9 @@ export function Sidebar() {
             </>
           ) : (
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-brand-primary via-brand-accent to-brand-secondary shadow-lg shadow-brand-primary/25">
-              <span className="font-display text-sm font-bold text-white">IP</span>
+              <span className="font-display text-sm font-bold text-white">
+                IP
+              </span>
             </div>
           )}
         </Link>
@@ -149,7 +167,9 @@ export function Sidebar() {
                         to={item.href}
                         className={cn(
                           "group relative flex items-center gap-3 rounded-xl py-2.5 pl-3 pr-2 transition-all duration-200",
-                          isSidebarOpen ? "justify-start" : "justify-center px-0",
+                          isSidebarOpen
+                            ? "justify-start"
+                            : "justify-center px-0",
                           isActive
                             ? "bg-white/[0.07] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
                             : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100",
@@ -208,7 +228,7 @@ export function Sidebar() {
             <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-brand-accent to-brand-secondary p-[2px]">
               <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-zinc-950">
                 <img
-                  src={user?.photoURL || "https://picsum.photos/seed/user/100"}
+                  src={photoURL || "https://picsum.photos/seed/user/100"}
                   alt=""
                   className="h-full w-full object-cover"
                   referrerPolicy="no-referrer"
@@ -219,18 +239,20 @@ export function Sidebar() {
           {isSidebarOpen && (
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-zinc-100">
-                {user?.displayName || "Utilizador"}
+                {displayName || "Utilizador"}
               </p>
-              <p className="truncate text-[11px] text-zinc-500">Plano Business</p>
+              <p className="truncate text-[11px] text-zinc-500">
+                Plano Business
+              </p>
             </div>
           )}
         </div>
 
         <button
           type="button"
-          onClick={logout}
+          onClick={() => void handleLogout()}
           className={cn(
-            "group relative flex w-full items-center gap-3 rounded-xl border border-transparent py-2.5 text-sm font-medium text-rose-400 transition-colors hover:border-rose-500/20 hover:bg-rose-500/10 hover:text-rose-300",
+            "group relative flex w-full cursor-pointer items-center gap-3 rounded-xl border border-transparent py-2.5 text-sm font-medium text-rose-400 transition-colors hover:border-rose-500/20 hover:bg-rose-500/10 hover:text-rose-300",
             isSidebarOpen ? "px-3" : "justify-center px-0",
           )}
         >

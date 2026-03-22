@@ -1,11 +1,13 @@
 # Como o projeto funciona (dev)
 
+> Documentação na raiz do repo: **[`../../docs/DEV-SETUP.md`](../../docs/DEV-SETUP.md)** (comandos `yarn api` / `yarn dev` na raiz).
+
 ## Visão geral
 
 | Parte | Comando | URL | Ficheiros |
 |--------|---------|-----|-----------|
-| **Frontend** | `yarn dev` | http://localhost:5173 | `app/`, `src/`, Vite |
-| **API** | `yarn api` | http://localhost:3000 | `api/server.ts` → `api/src/startServer.ts` |
+| **Frontend** | `yarn dev` (na raiz) ou `cd frontend && yarn dev` | http://localhost:5173 | `app/`, `src/`, Vite |
+| **API** | `yarn api` (na raiz) ou `cd api && yarn dev` | http://localhost:3000 | `api/server.ts` → `api/src/startServer.ts` |
 
 O browser **não** fala com a porta 3000 diretamente em dev (recomendado): o Vite faz **proxy** de `http://localhost:5173/api/*` → `http://localhost:3000/api/*`. Isto evita CORS e mantém o front a usar caminhos `/api/...` (`src/lib/api.ts`).
 
