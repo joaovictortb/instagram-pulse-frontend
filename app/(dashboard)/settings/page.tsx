@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch, apiFetchJson, readJsonBody } from "@/src/lib/api";
+import {
+  apiFetch,
+  apiFetchJson,
+  getApiBaseUrl,
+  readJsonBody,
+} from "@/src/lib/api";
 
 type Health = {
   ok?: boolean;

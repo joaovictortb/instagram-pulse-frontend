@@ -10,6 +10,7 @@ import {
   uploadImageToCloudinary,
 } from "./cloudinary-upload";
 import { envStudio, openAiKeyStudio } from "./env-studio";
+import { apiFetch } from "@/src/lib/api";
 
 const REPLICATE_API = "https://api.replicate.com/v1";
 const MODEL_OWNER = "google";
@@ -414,7 +415,7 @@ export async function generateEpicNewsImageWithReplicate(
   // Segundo: fallback direto (necessário em produção quando a rota /api não existe).
   // Em caso de pico/rejeição do Replicate (ex.: E003), fazemos retry com backoff.
   const tryProxy = async (): Promise<string | null> => {
-    const response = await fetch("/api/replicate/nano-banana-2", {
+    const response = await apiFetch("/api/replicate/nano-banana-2", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

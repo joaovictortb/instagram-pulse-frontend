@@ -20,9 +20,9 @@ O browser **não** fala com a porta 3000 diretamente em dev (recomendado): o Vit
    - **`.env` na raiz do repo** — o principal; copia de `.env.example`.
    - **`api/.env`** — opcional; só preenche variáveis que **ainda não existem** (a raiz ganha sempre).
 
-3. **Frontend:** variáveis `VITE_*` vêm do `.env` na **raiz** (Vite só lê da raiz). Não coloques secrets da Meta/OpenAI em `VITE_*`.
+3. **Frontend:** o `vite.config.ts` faz `loadEnv` na **raiz** e em **`frontend/`** (o segundo sobrepõe o primeiro). Usa `frontend/.env` para `VITE_API_*` e Supabase do painel. Não coloques secrets da Meta/OpenAI em `VITE_*`.
 
-4. **Em dev:** deixa `VITE_API_BASE_URL` **vazio** para usar o proxy. Se estiver errado ou a API desligada, o Vite devolve **HTML** (página SPA) em `/api/...` e o browser acusa erro de JSON — não é “bug do React”, é rota a bater no sítio errado.
+4. **Em dev:** deixa `VITE_API_BASE_URL` **vazio** e `VITE_API_PROXY_TARGET=http://localhost:3000` (ou a porta da API). Com a API desligada ou proxy errado, aparece HTML ou erro de JSON — na raiz corre `yarn api` e `yarn dev` (ver `../../docs/DEV-SETUP.md`).
 
 ## Checklist rápido
 

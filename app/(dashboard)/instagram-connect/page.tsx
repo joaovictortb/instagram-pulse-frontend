@@ -154,7 +154,9 @@ export default function InstagramConnectPage() {
     await queryClient.invalidateQueries({
       queryKey: ["me-instagram-connections"],
     });
-    await queryClient.invalidateQueries({ queryKey: ["api-health"] });
+    await queryClient.invalidateQueries({
+      queryKey: ["api-me-integration-health"],
+    });
     await queryClient.invalidateQueries({ queryKey: ["instagram-account"] });
     await queryClient.invalidateQueries({ queryKey: ["instagram-media"] });
     await queryClient.invalidateQueries({ queryKey: ["metrics-kpis"] });
