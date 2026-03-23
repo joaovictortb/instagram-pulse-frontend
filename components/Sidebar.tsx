@@ -52,9 +52,9 @@ const NAV_GROUPS: { id: string; label: string; items: NavItem[] }[] = [
     items: [
       { name: "Orquestrador", href: "/orchestrator", icon: Cpu },
       { name: "Studio", href: "/studio", icon: Clapperboard },
-      { name: "Instagram", href: "/instagram-connect", icon: Instagram },
+      // { name: "Instagram", href: "/instagram-connect", icon: Instagram },
       {
-        name: "YouTube → IG",
+        name: "YouTube",
         href: "/youtube-import",
         icon: Youtube,
       },

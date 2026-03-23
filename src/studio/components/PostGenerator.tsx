@@ -12,7 +12,6 @@ import {
   Check,
   Copy,
   ArrowUp,
-  ArrowRight,
   Zap,
   AlignCenter,
   AlignLeft,
@@ -27,6 +26,9 @@ import {
   Bug,
 } from "lucide-react";
 import { toPng, toJpeg } from "html-to-image";
+import { ImArrowRight } from "react-icons/im";
+import { AiOutlineArrowRight } from "react-icons/ai";
+
 import {
   Article,
   markArticleInstagramPublished,
@@ -35,6 +37,7 @@ import { cn } from "../lib/utils";
 import { getTeamBrand, type TeamBrand } from "../lib/teamColors";
 import { ALL_NFL_TEAMS } from "../lib/nfl-teams";
 import { TeamBranding } from "./TeamBranding";
+
 import {
   getInstagramConfig,
   hasInstagramConfig,
@@ -75,6 +78,7 @@ import { fetchGamePredictor } from "../services/espnPredictor";
 import type { GameRecap } from "../services/espnRecap";
 import type { GamePredictor } from "../services/espnPredictor";
 import { useHideTeamLogo } from "../context/HideLogoContext";
+import { HiArrowLongRight } from "react-icons/hi2";
 
 interface PostGeneratorProps {
   article: Article;
@@ -2167,11 +2171,17 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 />
                 {contractingTeam && (
                   <>
-                    <ArrowRight
-                      className="text-white drop-shadow-lg shrink-0"
-                      size={36}
-                      strokeWidth={2.5}
-                    />
+                    <div
+                      className="relative flex shrink-0 items-center justify-center"
+                      aria-hidden
+                    >
+                      <div className="absolute -inset-1" />
+                      <div className="relative flex items-center justify-center ">
+                        <span className="inline-flex text-white stroke-[1.5] ">
+                          <AiOutlineArrowRight size={44} />
+                        </span>
+                      </div>
+                    </div>
                     <TeamBranding
                       team={contractingTeam}
                       style={{ width: logoPx(80), height: logoPx(80) }}
@@ -2802,7 +2812,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             <div
               className="absolute inset-0"
               style={{
-                background: `linear-gradient(135deg, ${team.primary}99 0%, transparent 50%, black 100%)`,
+                background: `linear-gradient(135deg, ${team.primary}99 0%, transparent 20%, black 100%)`,
               }}
             />
             <div className="absolute top-0 left-0 right-0 flex justify-between items-start pt-4 px-4">
@@ -2831,10 +2841,14 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             >
               <h2
                 className={cn(
-                  "text-white font-black leading-[0.9] tracking-tighter drop-shadow-[0_4px_20px_rgba(0,0,0,0.8)]",
+                  "text-white font-black leading-[0.9] tracking-tighter",
                   headlineFont,
                 )}
-                style={headlineStyles}
+                style={{
+                  ...headlineStyles,
+                  textShadow:
+                    "0 1px 2px rgba(0,0,0,0.95), 0 2px 10px rgba(0,0,0,0.92), 0 4px 28px rgba(0,0,0,0.88), 0 0 48px rgba(0,0,0,0.55)",
+                }}
               >
                 {headline}
               </h2>
@@ -2842,7 +2856,13 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 className="mt-4 h-1 w-24 rounded-full"
                 style={{ backgroundColor: team.secondary }}
               />
-              <p className="text-white/70 text-xs font-bold uppercase tracking-widest mt-3">
+              <p
+                className="text-white/70 text-xs font-bold uppercase tracking-widest mt-3"
+                style={{
+                  textShadow:
+                    "0 1px 3px rgba(0,0,0,0.9), 0 2px 12px rgba(0,0,0,0.75)",
+                }}
+              >
                 {team.name}
               </p>
             </div>
@@ -2967,7 +2987,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               src={imageUrl}
               alt=""
               className={cn(
-                "w-full h-full object-cover opacity-50",
+                "w-full h-full object-cover opacity-40",
                 imagePositionClass,
               )}
               referrerPolicy="no-referrer"
@@ -2975,10 +2995,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             />
             <div
               className="absolute inset-0"
-              style={{
-                background:
-                  "radial-gradient(ellipse 70% 60% at 50% 50%, transparent 0%, rgba(0,0,0,0.4) 99%, black 100%)",
-              }}
+              // style={{
+              //   background:
+              //     "radial-gradient(ellipse 70% 60% at 50% 50%, transparent 0%, rgba(0,0,0,0.4) 99%, black 100%)",
+              // }}
             />
             <div className="absolute top-4 left-0 right-0 flex justify-center">
               <span

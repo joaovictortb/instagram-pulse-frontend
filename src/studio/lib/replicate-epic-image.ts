@@ -250,6 +250,26 @@ const PT_KEYWORDS: { keys: string[]; category: NewsVisualCategory }[] = [
   { keys: ["rumor", "report", "fontes"], category: "rumors" },
 ];
 
+/**
+ * Reforço: sem texto/typography SOBREPOSTO ao conteúdo.
+ * Números e detalhes do uniforme (camisa, capacete) da foto de referência devem ser preservados.
+ */
+const EPIC_IMAGE_NO_TEXT_SUFFIX_EN =
+  " Do not add any overlaid text, captions, headlines, watermarks, or typography on top of the image. Preserve the player's jersey number, helmet number, and all uniform details exactly as in the reference photo—these are part of the kit, not overlay text.";
+
+const OPENAI_EPIC_SYSTEM = `You are an expert at NFL social graphics. The user will give a news headline and content in Portuguese or English.
+
+Respond with ONLY valid JSON (no markdown):
+{"category":"trade"|"released"|"contract"|"draft"|"injury"|"fantasy"|"game_recap"|"rumors"|"general","prompt":"..."}
+
+The "prompt" must be in ENGLISH, 3-5 sentences, for an image-to-image model (Nano Banana / Gemini style).
+Rules for prompt:
+- Reference image is the main subject: MUST keep the same real athlete face, jersey (including jersey number, nameplate if visible), helmet, and body from the photo; no face swap. Do NOT remove or alter jersey numbers—they are part of the uniform, not overlay text.
+- Epic cinematic sports editorial look suitable for Instagram.
+- The OUTPUT must NOT add overlaid text: no captions, headlines, watermarks, scoreboard graphics with readable text, or artificial typography drawn on top of the photo. The scene should look like a real photograph—no extra words on the image. (Uniform numbers printed on fabric, helmet decals, and team logos as worn in the reference must stay.)
+- Mention lighting, atmosphere, and composition; team colors may accent the scene if clear from context.
+- Do not include URLs or hashtags in the prompt.`;
+
 function heuristicEpicPrompt(
   headline: string,
   contentSnippet: string,
@@ -265,47 +285,36 @@ function heuristicEpicPrompt(
 
   const styleHints: Record<NewsVisualCategory, string> = {
     trade:
-      "NFL blockbuster trade announcement vibe: dynamic split energy, motion blur hints, stadium lights, bold sports graphics style",
+      "NFL blockbuster trade vibe: dynamic energy, motion blur hints, stadium lights, bold color (no added text overlays)",
     released:
-      "somber but respectful NFL editorial: single athlete focus, dramatic shadows, newspaper headline energy",
+      "somber respectful NFL editorial: single athlete focus, dramatic shadows, quiet intensity (no text overlays)",
     contract:
       "celebration of a major NFL contract signing: premium gold and team color accents, confetti hints, victory glow",
     draft:
-      "NFL Draft night atmosphere: podium lights, rookie card energy, hopeful cinematic spotlight",
+      "NFL Draft night atmosphere: podium lights, hopeful cinematic spotlight (no podium text overlays)",
     injury:
-      "serious medical report tone: clean broadcast graphic style, subdued palette, clarity and respect",
+      "serious tone: clean broadcast look, subdued palette, clarity and respect (no on-screen text overlays)",
     fantasy:
-      "fantasy football analytics vibe: neon data overlays, charts aesthetic, competitive energy",
+      "fantasy football energy: neon accents, competitive atmosphere (no charts or scoreboard text overlays; keep jersey numbers on uniforms)",
     game_recap:
-      "post-game epic: stadium floodlights, scoreboard energy, motion and grit",
+      "post-game epic: stadium floodlights, motion and grit (no scoreboard text overlays; preserve uniform numbers from reference)",
     rumors:
-      "breaking news teaser: high contrast, mystery spotlight, 'insider' broadcast look",
+      "breaking news mood: high contrast, mystery spotlight, insider broadcast feel (no caption overlays)",
     general:
-      "epic NFL news hero image: cinematic stadium lighting, magazine cover quality",
+      "epic NFL news hero image: cinematic stadium lighting, premium editorial quality (no typography overlays)",
   };
 
   const prompt = [
     "Using the provided reference photo as the PRIMARY subject, create an epic, high-impact Instagram-ready NFL news image.",
-    "CRITICAL: Preserve the real identity of the person(s): same face, body proportions, skin tone, hairstyle, and jersey design from the reference. Do not swap faces or invent a different player.",
+    "CRITICAL: Preserve the real identity of the person(s): same face, body proportions, skin tone, hairstyle, and full jersey/uniform from the reference—including jersey number on chest/back, helmet number, and team colors. Do not swap faces, remove jersey numbers, or invent a different player.",
     "You may enhance lighting, background, atmosphere, particles, depth of field, and color grading for a premium sports editorial look.",
+    "Do NOT add overlaid text: no captions, headlines, watermarks, or typography on top of the photo. The only numbers visible should be those printed on the uniform as in the reference (jersey/helmet), not fake overlay text.",
     styleHints[category],
-    `Context (for mood only, do not render this text on the image): ${headline.slice(0, 200)}`,
+    `Context (for mood only, do not render as text on the image): ${headline.slice(0, 200)}`,
   ].join(" ");
 
   return { category, prompt };
 }
-
-const OPENAI_EPIC_SYSTEM = `You are an expert at NFL social graphics. The user will give a news headline and content in Portuguese or English.
-
-Respond with ONLY valid JSON (no markdown):
-{"category":"trade"|"released"|"contract"|"draft"|"injury"|"fantasy"|"game_recap"|"rumors"|"general","prompt":"..."}
-
-The "prompt" must be in ENGLISH, 3-5 sentences, for an image-to-image model (Nano Banana / Gemini style).
-Rules for prompt:
-- Reference image is the main subject: MUST keep the same real athlete face, jersey, and body from the photo; no face swap.
-- Epic cinematic sports editorial look suitable for Instagram (not cluttered text on image).
-- Mention lighting, atmosphere, and composition; team colors may accent the scene if clear from context.
-- Do not include URLs or hashtags in the prompt.`;
 
 export async function buildEpicImagePromptWithOpenAI(params: {
   headline: string;
@@ -403,10 +412,12 @@ export async function generateEpicNewsImageWithReplicate(
   const { sourceImageUrl, headline, content } = opts;
   const publicUrl = await ensurePublicImageUrlForReplicate(sourceImageUrl);
 
-  const { category, prompt } = await buildEpicImagePromptWithOpenAI({
+  const built = await buildEpicImagePromptWithOpenAI({
     headline,
     content,
   });
+  const category = built.category;
+  const prompt = `${built.prompt.trim()}${EPIC_IMAGE_NO_TEXT_SUFFIX_EN}`;
 
   const aspect_ratio = opts.aspectRatio ?? "match_input_image";
   const resolution = opts.resolution ?? "1K";

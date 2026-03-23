@@ -4,6 +4,7 @@
  * Use VITE_CLOUDINARY_*_STUDIO ou VITE_CLOUDINARY_* no .env.
  */
 
+import { apiFetchJson } from "@/src/lib/api";
 import { envStudio } from "./env-studio";
 
 function getCloudinaryCloudName(): string {
@@ -84,6 +85,96 @@ async function reencodeDataUrlToJpeg(
  * Faz upload da imagem (data URL) para a Cloudinary e retorna a URL pública.
  * A Meta/Instagram exige URL HTTPS acessível publicamente — a Cloudinary fornece isso.
  */
+/** Tenta baixar uma imagem remota como data URL (CORS). */
+async function fetchUrlAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const r = await fetch(url, { mode: "cors" });
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () =>
+        resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export type UploadRemoteImageOptions = {
+  /** Se a URL principal falhar (ex.: Facebook), a API tenta esta (ex.: miniatura Google). */
+  fallbackUrl?: string;
+};
+
+/**
+ * Baixa uma imagem por URL (ESPN, SerpAPI, etc.), faz upload unsigned na Cloudinary e devolve `secure_url`.
+ *
+ * 1) **Preferência:** `POST /api/cloudinary-upload-from-url` — o servidor faz fetch (sem CORS no browser)
+ *    e envia ao Cloudinary (precisa de `CLOUDINARY_*` no `api/.env`, mesmo preset que o front).
+ * 2) Fallback: browser + proxy CORS (último recurso).
+ */
+export async function uploadRemoteImageUrlToCloudinary(
+  imageUrl: string,
+  options?: UploadRemoteImageOptions,
+): Promise<string> {
+  const trimmed = imageUrl.trim();
+  if (!trimmed.startsWith("http")) {
+    throw new Error("URL da imagem inválida.");
+  }
+  if (!hasCloudinaryConfig()) {
+    throw new Error(
+      "Configure Cloudinary (VITE_CLOUDINARY_CLOUD_NAME + VITE_CLOUDINARY_UPLOAD_PRESET) para hospedar a imagem.",
+    );
+  }
+
+  const fallback = options?.fallbackUrl?.trim();
+  const body: { url: string; fallbackUrl?: string } = { url: trimmed };
+  if (
+    fallback &&
+    fallback !== trimmed &&
+    fallback.startsWith("http")
+  ) {
+    body.fallbackUrl = fallback;
+  }
+
+  try {
+    const data = await apiFetchJson<{ ok?: boolean; secure_url?: string }>(
+      "/api/cloudinary-upload-from-url",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (
+      data.ok &&
+      typeof data.secure_url === "string" &&
+      data.secure_url.startsWith("http")
+    ) {
+      return data.secure_url;
+    }
+  } catch (e) {
+    console.warn(
+      "[cloudinary] upload por URL no servidor falhou, tentando fallback no browser:",
+      e instanceof Error ? e.message : e,
+    );
+  }
+
+  let dataUrl = await fetchUrlAsDataUrl(trimmed);
+  if (!dataUrl) {
+    const proxy = `https://corsproxy.io/?${encodeURIComponent(trimmed)}`;
+    dataUrl = await fetchUrlAsDataUrl(proxy);
+  }
+  if (!dataUrl) {
+    throw new Error(
+      "Não foi possível baixar a imagem (CORS). Confirma CLOUDINARY_* na API (upload por URL no servidor) ou cola a URL manualmente.",
+    );
+  }
+  return uploadImageToCloudinary(dataUrl);
+}
+
 export async function uploadImageToCloudinary(
   dataUrl: string,
 ): Promise<string> {

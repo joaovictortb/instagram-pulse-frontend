@@ -13,6 +13,8 @@ import {
   Image as ImageIcon,
   Loader2,
   Send,
+  Search,
+  User,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { toPng } from "html-to-image";
@@ -49,8 +51,13 @@ import {
 import { publishCarouselToInstagram } from "../lib/instagram-publish";
 import {
   uploadImageToCloudinary,
+  uploadRemoteImageUrlToCloudinary,
   hasCloudinaryConfig,
 } from "../lib/cloudinary-upload";
+import {
+  searchGoogleImages,
+  type GoogleImageHit,
+} from "../services/googleImageSearch";
 import { markArticleInstagramPublished } from "../services/newsService";
 import { hasOpenAIKey } from "../lib/openai-rewrite-caption";
 import { formatDateTime } from "../lib/utils";
@@ -61,6 +68,11 @@ import { SlideRendererGuia } from "./CarouselSlideRenderer";
 const INSTAGRAM_CAROUSEL_WIDTH = 1080;
 const INSTAGRAM_CAROUSEL_HEIGHT = 1350; // 1080 * 5/4
 
+/** Largura do preview na UI (px). Export PNG continua 1080px (`pixelRatio = 1080 / este valor`). */
+const CAROUSEL_PREVIEW_CSS_WIDTH = 520;
+/** Largura do slide “off-screen” usado na captura para publicar (metade do 1080px físico). */
+const CAROUSEL_EXPORT_LAYER_CSS_WIDTH = 540;
+
 /** Templates visuais do guia: cada um com cores, tipografia e elementos próprios. */
 const VISUAL_TEMPLATES: {
   id: CarouselVisualTemplateId;
@@ -70,12 +82,12 @@ const VISUAL_TEMPLATES: {
   {
     id: "editorial",
     name: "Editorial",
-    description: "Moderno & limpo, serif, espaços negativos",
+    description: "Revista NFL: contraste alto, faixa do time, gradiente escuro",
   },
   {
     id: "brutalist",
     name: "Brutalist",
-    description: "Impacto máximo, bordas grossas, mono",
+    description: "Endzone: tarjas, moldura forte, estética stadium",
   },
   {
     id: "breaking",
@@ -85,28 +97,32 @@ const VISUAL_TEMPLATES: {
   {
     id: "magazine",
     name: "Magazine",
-    description: "Capa de revista, edição e data",
+    description: "Capa ESPN/SI: moldura, data e manchete forte",
   },
   {
     id: "social",
     name: "Social",
-    description: "Estilo Instagram/post moderno",
+    description: "Feed dark mode + @nflstudio.br",
   },
   {
     id: "stats",
     name: "Stats",
-    description: "Focado em números e performance",
+    description: "Stat line / placar, blocos de destaque",
   },
   {
     id: "retro",
     name: "Retro",
-    description: "Jornal antigo, papel amarelado, colunas",
+    description: "Extra esportivo vintage, vermelho NFL",
   },
-  { id: "cyber", name: "Cyber", description: "Futurista, neon, scan lines" },
+  {
+    id: "cyber",
+    name: "Cyber",
+    description: "HUD de transmissão (navy + vermelho)",
+  },
   {
     id: "bento",
     name: "Bento",
-    description: "Grid modular moderno",
+    description: "Grid com foto grande + cards de texto",
   },
   {
     id: "team_hero",
@@ -116,7 +132,7 @@ const VISUAL_TEMPLATES: {
   {
     id: "team_headline",
     name: "Headline do time",
-    description: "Faixa colorida do time com título forte e texto embaixo",
+    description: "Lower third broadcast + faixa nas cores do time",
   },
   {
     id: "players_list",
@@ -264,6 +280,20 @@ export function CarouselGenerator({
   /** Durante captura (publicar/download), o slide usa só placeholder para evitar erro de img não carregada no toPng. */
   const [captureForExport, setCaptureForExport] = useState(false);
   const [showTeamLogo, setShowTeamLogo] = useState(true);
+
+  /** Biblioteca: SerpAPI (Google Imagens) → Cloudinary → URL do slide. */
+  const [playerLibName, setPlayerLibName] = useState("");
+  const [playerLibTeam, setPlayerLibTeam] = useState(
+    () => article.team?.abbreviation?.trim() ?? "",
+  );
+  const [playerLibResults, setPlayerLibResults] = useState<GoogleImageHit[]>(
+    [],
+  );
+  const [playerLibLoading, setPlayerLibLoading] = useState(false);
+  const [playerLibErr, setPlayerLibErr] = useState<string | null>(null);
+  const [playerLibApplyingId, setPlayerLibApplyingId] = useState<string | null>(
+    null,
+  );
 
   /** URL ESPN para "Buscar conteúdo" (imagens da notícia). */
   const [espnUrlInput, setEspnUrlInput] = useState(
@@ -581,6 +611,68 @@ export function CarouselGenerator({
     setEditingImageUrl(null);
   };
 
+  useEffect(() => {
+    setPlayerLibResults([]);
+    setPlayerLibErr(null);
+  }, [currentSlideIndex]);
+
+  const runPlayerLibSearch = async () => {
+    const name = playerLibName.trim();
+    if (name.length < 2) {
+      setPlayerLibErr("Digite pelo menos 2 letras do nome.");
+      return;
+    }
+    setPlayerLibLoading(true);
+    setPlayerLibErr(null);
+    try {
+      const team = playerLibTeam.trim();
+      const query = [name, team, "NFL"].filter(Boolean).join(" ");
+      const list = await searchGoogleImages(query, 10);
+      setPlayerLibResults(list);
+      if (list.length === 0) {
+        setPlayerLibErr(
+          "Nenhuma imagem encontrada. Tente outro nome, sigla do time (ex.: CHI) ou termos mais específicos.",
+        );
+      }
+    } catch (e) {
+      setPlayerLibErr(
+        e instanceof Error ? e.message : "Falha ao buscar imagens (SerpAPI).",
+      );
+      setPlayerLibResults([]);
+    } finally {
+      setPlayerLibLoading(false);
+    }
+  };
+
+  const applyPlayerLibImage = async (c: GoogleImageHit) => {
+    if (!hasCloudinaryConfig()) {
+      setError(
+        "Configure Cloudinary (VITE_CLOUDINARY_*) para importar a foto do jogador.",
+      );
+      return;
+    }
+    setPlayerLibApplyingId(c.id);
+    setError(null);
+    try {
+      const url = await uploadRemoteImageUrlToCloudinary(c.imageUrl, {
+        fallbackUrl:
+          c.thumbnailUrl && c.thumbnailUrl !== c.imageUrl
+            ? c.thumbnailUrl
+            : undefined,
+      });
+      handleUpdateImageUrl(currentSlideIndex, url);
+      setPlayerLibErr(null);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Falha ao enviar imagem para Cloudinary.",
+      );
+    } finally {
+      setPlayerLibApplyingId(null);
+    }
+  };
+
   const removeCarouselSlide = (index: number) => {
     if (!carousel || carousel.slides.length <= 2) return;
     const newSlides = carousel.slides
@@ -610,7 +702,7 @@ export function CarouselGenerator({
         if (node) {
           const dataUrl = await toPng(node, {
             quality: 1,
-            pixelRatio: INSTAGRAM_CAROUSEL_WIDTH / 500,
+            pixelRatio: INSTAGRAM_CAROUSEL_WIDTH / CAROUSEL_PREVIEW_CSS_WIDTH,
           });
           const link = document.createElement("a");
           link.download = `nfl-carousel-slide-${i + 1}.png`;
@@ -734,7 +826,8 @@ export function CarouselGenerator({
     const previousIndex = currentSlideIndex;
     try {
       const uploadedUrls: string[] = [];
-      const pixelRatio = INSTAGRAM_CAROUSEL_WIDTH / 500;
+      const pixelRatio =
+        INSTAGRAM_CAROUSEL_WIDTH / CAROUSEL_EXPORT_LAYER_CSS_WIDTH;
       for (let i = 0; i < carousel.slides.length; i++) {
         setCurrentSlideIndex(i);
         await new Promise((r) => setTimeout(r, 450));
@@ -1048,16 +1141,29 @@ export function CarouselGenerator({
                     </div>
                   </div>
 
-                  <div className="group relative mx-auto aspect-4/5 w-full max-w-[500px]">
-                    {/* Hidden refs for all slides (for export) */}
+                  <div
+                    className="group relative mx-auto aspect-4/5 w-full shrink-0 overflow-hidden rounded-lg"
+                    style={{ maxWidth: CAROUSEL_PREVIEW_CSS_WIDTH }}
+                  >
+                    {/*
+                      Slides só para export (toPng): empilhados em coluna fora do ecrã.
+                      Uma fila horizontal com muitos slides invadia o preview; coluna mantém
+                      largura ~540px e -9999px basta para esconder todos.
+                    */}
                     <div
-                      className="absolute -left-[9999px] top-0 flex"
+                      className="pointer-events-none absolute top-0 -left-[9999px] z-0 flex w-max flex-col gap-0"
                       aria-hidden
                     >
                       {carousel.slides.map((s, i) => (
                         <div
                           key={`export-${s.id}`}
-                          className="h-[675px] w-[540px] shrink-0"
+                          className="shrink-0"
+                          style={{
+                            width: CAROUSEL_EXPORT_LAYER_CSS_WIDTH,
+                            height: Math.round(
+                              (CAROUSEL_EXPORT_LAYER_CSS_WIDTH * 5) / 4,
+                            ),
+                          }}
                         >
                           <SlideRendererGuia
                             slide={s}
@@ -1077,14 +1183,14 @@ export function CarouselGenerator({
                         </div>
                       ))}
                     </div>
-                    {/* Visible current slide (visibleSlideRef usado na publicação) */}
+                    {/* Slide visível (por cima da camada de export) */}
                     <AnimatePresence mode="wait">
                       <motion.div
                         key={currentSlideIndex}
                         initial={{ opacity: 0, x: 20 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: -20 }}
-                        className="h-full w-full"
+                        className="relative z-10 w-full"
                       >
                         <SlideRendererGuia
                           slide={carousel.slides[currentSlideIndex]}
@@ -1233,6 +1339,182 @@ export function CarouselGenerator({
                       )}
                       {publishing ? "Publicando…" : "Publicar no Instagram"}
                     </button>
+                  </div>
+
+                  {/* URL + preview da imagem de cada slide (abaixo de Exportar / Publicar) */}
+                  <div
+                    className="w-full space-y-3 self-center"
+                    style={{ maxWidth: CAROUSEL_PREVIEW_CSS_WIDTH }}
+                  >
+                    {(() => {
+                      const cur = carousel.slides[currentSlideIndex];
+                      if (!cur) return null;
+                      const thumb = cur.image?.trim() ?? "";
+                      return (
+                        <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-bold uppercase text-white/50">
+                              Slide {currentSlideIndex + 1}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removeCarouselSlide(currentSlideIndex)
+                              }
+                              disabled={carousel.slides.length <= 2}
+                              className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold text-red-400 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-30"
+                            >
+                              <X size={10} /> Remover
+                            </button>
+                          </div>
+                          <div className="overflow-hidden rounded-xl border border-white/15 bg-black/50">
+                            {/* <div className="relative aspect-4/5 w-full max-h-[min(70vh,560px)] min-h-[220px]">
+                              {thumb ? (
+                                <img
+                                  src={thumb}
+                                  alt=""
+                                  className="h-full w-full object-cover object-center"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <div className="flex h-full min-h-[220px] w-full items-center justify-center text-sm text-white/30">
+                                  Sem imagem — pesquisa abaixo ou cola URL
+                                </div>
+                              )}
+                            </div> */}
+                          </div>
+                          <input
+                            type="url"
+                            value={cur.image ?? ""}
+                            onChange={(e) =>
+                              handleUpdateImageUrl(
+                                currentSlideIndex,
+                                e.target.value,
+                              )
+                            }
+                            placeholder="https://..."
+                            className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white placeholder:text-white/25 outline-none focus:border-nfl-red"
+                          />
+
+                          <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
+                            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-white/45">
+                              <User size={12} className="shrink-0" />
+                              Google Imagens (SerpAPI)
+                            </div>
+                            <p className="text-[10px] leading-snug text-white/40">
+                              Pesquisa imagens na web via SerpAPI (chave no
+                              servidor: SERPAPI_API_KEY). Envia para Cloudinary
+                              e preenche o campo acima. Time opcional ajuda a
+                              refinar (sigla: CHI, GB…).
+                            </p>
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                              <div className="min-w-0 flex-1">
+                                <label className="mb-0.5 block text-[9px] font-bold uppercase text-white/35">
+                                  Nome do jogador
+                                </label>
+                                <input
+                                  type="text"
+                                  value={playerLibName}
+                                  onChange={(e) =>
+                                    setPlayerLibName(e.target.value)
+                                  }
+                                  placeholder="Ex.: Coby Bryant"
+                                  className="w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white placeholder:text-white/25 outline-none focus:border-nfl-red"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      void runPlayerLibSearch();
+                                    }
+                                  }}
+                                />
+                              </div>
+                              <div className="w-full sm:w-28">
+                                <label className="mb-0.5 block text-[9px] font-bold uppercase text-white/35">
+                                  Time (opcional)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={playerLibTeam}
+                                  onChange={(e) =>
+                                    setPlayerLibTeam(e.target.value)
+                                  }
+                                  placeholder="CHI"
+                                  className="w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white placeholder:text-white/25 outline-none focus:border-nfl-red"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void runPlayerLibSearch()}
+                                disabled={playerLibLoading}
+                                className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-nfl-blue/90 px-3 py-2 text-[11px] font-bold text-white hover:bg-nfl-blue disabled:opacity-50"
+                              >
+                                {playerLibLoading ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <Search size={14} />
+                                )}
+                                Buscar
+                              </button>
+                            </div>
+                            {playerLibErr && (
+                              <p className="text-[11px] text-amber-400/90">
+                                {playerLibErr}
+                              </p>
+                            )}
+                            {!hasCloudinaryConfig() && (
+                              <p className="text-[10px] text-amber-400/80">
+                                Configure Cloudinary para importar a foto
+                                (upload da URL da imagem).
+                              </p>
+                            )}
+                            {playerLibResults.length > 0 && (
+                              <div className="grid max-h-[min(55vh,520px)] grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden pr-1 sm:grid-cols-2">
+                                {playerLibResults.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => void applyPlayerLibImage(c)}
+                                    disabled={
+                                      playerLibApplyingId !== null ||
+                                      !hasCloudinaryConfig()
+                                    }
+                                    className="group flex flex-col overflow-hidden rounded-xl border border-white/15 bg-black/50 text-left transition-colors hover:border-nfl-red hover:bg-white/[0.07] disabled:opacity-50"
+                                  >
+                                    <div className="relative aspect-4/3 w-full shrink-0 overflow-hidden bg-black/70">
+                                      <img
+                                        src={c.thumbnailUrl || c.imageUrl}
+                                        alt=""
+                                        className="h-full w-full object-cover object-center transition-transform group-hover:scale-[1.02]"
+                                        referrerPolicy="no-referrer"
+                                        loading="lazy"
+                                      />
+                                      {playerLibApplyingId === c.id ? (
+                                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                                          <Loader2
+                                            size={28}
+                                            className="animate-spin text-white"
+                                          />
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                    <div className="flex min-h-0 flex-1 flex-col gap-0.5 p-2.5">
+                                      <span className="line-clamp-2 text-[11px] font-semibold leading-snug text-white/95">
+                                        {c.title}
+                                      </span>
+                                      {c.displayLink ? (
+                                        <span className="line-clamp-1 text-[10px] text-white/40">
+                                          {c.displayLink}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </>
               )}
@@ -1426,47 +1708,6 @@ export function CarouselGenerator({
                       <span className="text-nfl-blue">
                         {carousel.hashtags.join(" ")}
                       </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="px-2 text-xs font-bold uppercase tracking-wider text-white/40">
-                      URLs das imagens
-                    </div>
-                    <p className="px-2 text-[11px] text-white/35">
-                      Edite ou troque a URL de cada slide. Na publicação, essas
-                      imagens serão usadas quando forem válidas.
-                    </p>
-                    <div className="space-y-2">
-                      {carousel.slides.map((slide, idx) => (
-                        <div
-                          key={slide.id}
-                          className="rounded-xl border border-white/10 bg-white/5 p-2 space-y-1.5"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-bold uppercase text-white/50 shrink-0">
-                              Slide {idx + 1}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeCarouselSlide(idx)}
-                              disabled={carousel.slides.length <= 2}
-                              className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-red-400 hover:bg-red-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
-                            >
-                              <X size={10} /> Remover
-                            </button>
-                          </div>
-                          <input
-                            type="url"
-                            value={slide.image ?? ""}
-                            onChange={(e) =>
-                              handleUpdateImageUrl(idx, e.target.value)
-                            }
-                            placeholder="https://..."
-                            className="w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white placeholder:text-white/25 focus:border-nfl-red outline-none"
-                          />
-                        </div>
-                      ))}
                     </div>
                   </div>
 
