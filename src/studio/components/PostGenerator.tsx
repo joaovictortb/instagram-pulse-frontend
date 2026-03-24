@@ -24,6 +24,7 @@ import {
   Sparkles,
   Image as ImageIcon,
   Bug,
+  ArrowRight,
 } from "lucide-react";
 import { toPng, toJpeg } from "html-to-image";
 import { ImArrowRight } from "react-icons/im";
@@ -47,13 +48,17 @@ import {
   publishStoryImageToInstagram,
   publishCarouselToInstagram,
   publishReelToInstagram,
+  type InstagramCarouselItem,
 } from "../lib/instagram-publish";
 import {
   uploadImageToCloudinary,
   uploadVideoToCloudinary,
   hasCloudinaryConfig,
 } from "../lib/cloudinary-upload";
-import { fetchEspnArticleContent } from "../lib/espn-content";
+import {
+  fetchEspnArticleContent,
+  extractVideoUrlsFromEspnStory,
+} from "../lib/espn-content";
 import {
   rewriteContentAsCaption,
   hasOpenAIKey,
@@ -78,7 +83,25 @@ import { fetchGamePredictor } from "../services/espnPredictor";
 import type { GameRecap } from "../services/espnRecap";
 import type { GamePredictor } from "../services/espnPredictor";
 import { useHideTeamLogo } from "../context/HideLogoContext";
-import { HiArrowLongRight } from "react-icons/hi2";
+type CarouselMediaItem = InstagramCarouselItem;
+
+function firstImageUrlFromCarouselMedia(
+  media: CarouselMediaItem[],
+): string | undefined {
+  for (const m of media) {
+    if (m.kind === "image") return m.url;
+  }
+  return undefined;
+}
+
+function guessVideoFileExtension(url: string, mime: string): string {
+  const lower = url.toLowerCase();
+  if (lower.includes(".webm")) return "webm";
+  if (lower.includes(".mov")) return "mov";
+  if (mime.includes("webm")) return "webm";
+  if (mime.includes("quicktime")) return "mov";
+  return "mp4";
+}
 
 interface PostGeneratorProps {
   article: Article;
@@ -98,7 +121,6 @@ type PostStyle =
   | "RELEASED"
   | "RUMORS"
   | "TRADED"
-  | "TRADED_CARD"
   | "QUOTE"
   | "SPLIT_TRADE"
   | "SPLIT_RELEASE"
@@ -153,7 +175,29 @@ type PostStyle =
   | "PREDICTOR"
   | "TRANSACTIONS"
   | "FUTURES"
-  | "TALENT_PICKS";
+  | "TALENT_PICKS"
+  /** Novos — referência gráficos tipo Canva / sports news */
+  | "STADIUM_NIGHT"
+  | "TABLOID_EXTRA"
+  | "GLASS_HUD"
+  | "TURF_STRIP"
+  | "CINEMA_LETTERBOX"
+  | "MAGAZINE_COVER"
+  | "PLAYOFF_BRACKET"
+  | "CHROME_FLARE"
+  | "RED_ZONE_BAR"
+  | "HALFTONE_POP"
+  /** Mais estilos tipo Canva / redes NFL */
+  | "NFL_SUNDAY_SLATE"
+  | "INJURY_ALERT"
+  | "FREE_AGENCY"
+  | "DRAFT_PODIUM"
+  | "PLAYOFF_PICTURE"
+  | "FANTASY_WIRE"
+  | "LOCKER_ROOM"
+  | "PRESS_CONFERENCE"
+  | "ENDZONE_SCORE"
+  | "ROOKIE_SPOTLIGHT";
 type PostFormat = "1:1" | "4:5" | "9:16";
 type FontOption = "font-sans" | "font-display" | "font-mono" | "font-serif";
 
@@ -301,9 +345,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
   const [isPublishing, setIsPublishing] = useState(false);
   // Conteúdo completo da notícia (buscar conteúdo ESPN) — só para Feed
   const [fullArticleContent, setFullArticleContent] = useState("");
-  /** URLs de imagens retornadas ao "Buscar conteúdo" (ESPN). Usado para publicar como carrossel. */
-  const [fetchedContentImageUrls, setFetchedContentImageUrls] = useState<
-    string[]
+  /** Mídias (imagens + vídeos) retornadas ao "Buscar conteúdo" (ESPN). Usado para publicar como carrossel. */
+  const [fetchedCarouselMedia, setFetchedCarouselMedia] = useState<
+    CarouselMediaItem[]
   >([]);
   const [publishAsCarousel, setPublishAsCarousel] = useState(false);
   /** Índice do slide exibido no preview do carrossel (área central). */
@@ -399,6 +443,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
   // Margem do texto para as bordas do post (px)
   const [textMargin, setTextMargin] = useState(32);
 
+  /** 0–100: opacidade das camadas escuras sobre a foto da notícia (gradientes / vinhetas). */
+  const [imageOverlayOpacity, setImageOverlayOpacity] = useState(100);
+
   // Time original â†’ time contratante: null = time do artigo; selecionado = time contratante (logo/nome/cores nos templates).
   const [selectedTeamForLogo, setSelectedTeamForLogo] =
     useState<TeamBrand | null>(null);
@@ -457,21 +504,19 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     espnUrlInput,
   ]);
 
-  // Resetar slide do preview do carrossel quando a lista de imagens mudar
+  // Resetar slide do preview do carrossel quando a lista de mídias mudar
   useEffect(() => {
     setCarouselPreviewIndex(0);
-  }, [fetchedContentImageUrls.length]);
+  }, [fetchedCarouselMedia.length]);
 
-  const removeCarouselImage = (index: number) => {
-    const nextUrls = fetchedContentImageUrls.filter((_, i) => i !== index);
-    setFetchedContentImageUrls(nextUrls);
-    if (nextUrls.length <= 1) setCarouselPreviewIndex(0);
+  const removeCarouselMediaItem = (index: number) => {
+    const next = fetchedCarouselMedia.filter((_, i) => i !== index);
+    setFetchedCarouselMedia(next);
+    if (next.length <= 1) setCarouselPreviewIndex(0);
     else if (index < carouselPreviewIndex)
       setCarouselPreviewIndex((i) => i - 1);
     else if (index === carouselPreviewIndex)
-      setCarouselPreviewIndex(
-        Math.min(carouselPreviewIndex, nextUrls.length - 1),
-      );
+      setCarouselPreviewIndex(Math.min(carouselPreviewIndex, next.length - 1));
   };
 
   // Ao escolher Stories, o preview passa para 9:16 (1080×1920) para refletir o que será publicado
@@ -795,6 +840,206 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
         setBadgeSize(24);
         setBadgeSkew(0);
         break;
+      case "STADIUM_NIGHT":
+        setHeadlineSize(44);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("EXCLUSIVE");
+        setBadgeSize(22);
+        setBadgeSkew(-4);
+        break;
+      case "TABLOID_EXTRA":
+        setHeadlineSize(36);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("EXTRA");
+        setBadgeSize(52);
+        setBadgeSkew(0);
+        break;
+      case "GLASS_HUD":
+        setHeadlineSize(34);
+        setHeadlineFont("font-mono");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(false);
+        setBadgeText("LIVE");
+        setBadgeSize(18);
+        setBadgeSkew(0);
+        break;
+      case "TURF_STRIP":
+        setHeadlineSize(38);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(true);
+        setBadgeText("NFL");
+        setBadgeSize(26);
+        setBadgeSkew(-6);
+        break;
+      case "CINEMA_LETTERBOX":
+        setHeadlineSize(42);
+        setHeadlineFont("font-serif");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(false);
+        setBadgeText("FEATURE");
+        setBadgeSize(20);
+        setBadgeSkew(0);
+        break;
+      case "MAGAZINE_COVER":
+        setHeadlineSize(32);
+        setHeadlineFont("font-serif");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(false);
+        setBadgeText("COVER");
+        setBadgeSize(18);
+        setBadgeSkew(0);
+        break;
+      case "PLAYOFF_BRACKET":
+        setHeadlineSize(40);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("PLAYOFFS");
+        setBadgeSize(24);
+        setBadgeSkew(0);
+        break;
+      case "CHROME_FLARE":
+        setHeadlineSize(36);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(true);
+        setBadgeText("NFL");
+        setBadgeSize(22);
+        setBadgeSkew(-3);
+        break;
+      case "RED_ZONE_BAR":
+        setHeadlineSize(38);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("LIVE");
+        setBadgeSize(20);
+        setBadgeSkew(0);
+        break;
+      case "HALFTONE_POP":
+        setHeadlineSize(34);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("NEWS");
+        setBadgeSize(28);
+        setBadgeSkew(-8);
+        break;
+      case "NFL_SUNDAY_SLATE":
+        setHeadlineSize(42);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("SUNDAY");
+        setBadgeSize(26);
+        setBadgeSkew(0);
+        break;
+      case "INJURY_ALERT":
+        setHeadlineSize(36);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("INJURY");
+        setBadgeSize(22);
+        setBadgeSkew(0);
+        break;
+      case "FREE_AGENCY":
+        setHeadlineSize(38);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(true);
+        setBadgeText("FREE AGENT");
+        setBadgeSize(20);
+        setBadgeSkew(-4);
+        break;
+      case "DRAFT_PODIUM":
+        setHeadlineSize(40);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("DRAFT");
+        setBadgeSize(24);
+        setBadgeSkew(0);
+        break;
+      case "PLAYOFF_PICTURE":
+        setHeadlineSize(38);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(true);
+        setBadgeText("PLAYOFFS");
+        setBadgeSize(22);
+        setBadgeSkew(0);
+        break;
+      case "FANTASY_WIRE":
+        setHeadlineSize(34);
+        setHeadlineFont("font-mono");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("FANTASY");
+        setBadgeSize(18);
+        setBadgeSkew(0);
+        break;
+      case "LOCKER_ROOM":
+        setHeadlineSize(36);
+        setHeadlineFont("font-serif");
+        setHeadlineAlign("left");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(false);
+        setBadgeText("INSIDER");
+        setBadgeSize(16);
+        setBadgeSkew(0);
+        break;
+      case "PRESS_CONFERENCE":
+        setHeadlineSize(32);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("PRESSER");
+        setBadgeSize(20);
+        setBadgeSkew(0);
+        break;
+      case "ENDZONE_SCORE":
+        setHeadlineSize(44);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(true);
+        setHeadlineUppercase(true);
+        setBadgeText("TD");
+        setBadgeSize(28);
+        setBadgeSkew(-6);
+        break;
+      case "ROOKIE_SPOTLIGHT":
+        setHeadlineSize(36);
+        setHeadlineFont("font-display");
+        setHeadlineAlign("center");
+        setHeadlineItalic(false);
+        setHeadlineUppercase(true);
+        setBadgeText("ROOKIE");
+        setBadgeSize(26);
+        setBadgeSkew(0);
+        break;
       default:
         setHeadlineSize(40);
         setHeadlineFont("font-display");
@@ -875,11 +1120,56 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       if (!captionForInstagram.trim()) {
         setCaptionForInstagram(rawContent);
       }
-      setFetchedContentImageUrls(result.imageUrls ?? []);
+      const articleHtmlForVideo = [
+        article.content?.trim(),
+        article.description?.trim(),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const fromArticleBody = extractVideoUrlsFromEspnStory(
+        articleHtmlForVideo || undefined,
+        {},
+      );
+      const rawCarousel: CarouselMediaItem[] = [
+        ...(result.imageUrls ?? []).map((url) => ({
+          kind: "image" as const,
+          url,
+        })),
+        ...(result.videoUrls ?? []).map((url) => ({
+          kind: "video" as const,
+          url,
+        })),
+        ...fromArticleBody.map((url) => ({
+          kind: "video" as const,
+          url,
+        })),
+      ];
+      const seenCarouselUrl = new Set<string>();
+      const mergedMedia: CarouselMediaItem[] = [];
+      for (const item of rawCarousel) {
+        if (seenCarouselUrl.has(item.url)) continue;
+        seenCarouselUrl.add(item.url);
+        mergedMedia.push(item);
+        if (mergedMedia.length >= 10) break;
+      }
+      if (import.meta.env.DEV) {
+        console.log("[editor-post] fetchContentFromEspn: carrossel", {
+          imageUrlsFromApi: result.imageUrls?.length ?? 0,
+          videoUrlsFromApi: result.videoUrls?.length ?? 0,
+          videoUrlsFromApiList: result.videoUrls?.map((u) => u.slice(0, 140)),
+          videoUrlsFromArticleContentOrDesc: fromArticleBody.length,
+          videoUrlsFromArticleList: fromArticleBody.map((u) => u.slice(0, 140)),
+          mergedTotal: mergedMedia.length,
+          kinds: mergedMedia.map((m) => m.kind),
+        });
+      }
+      setFetchedCarouselMedia(mergedMedia);
       setPublishAsCarousel(false);
+      const imgN = result.imageUrls?.length ?? 0;
+      const vidN = result.videoUrls?.length ?? 0;
       setPublishMessage({
         type: "success",
-        text: `Conteúdo carregado (${(result.contentMarkdown || result.description).length} caracteres${result.imageUrls?.length ? `, ${result.imageUrls.length} imagem(ns)` : ""}). Use "Reescrever com IA" ou publique como carrossel.`,
+        text: `Conteúdo carregado (${(result.contentMarkdown || result.description).length} caracteres${imgN || vidN ? `, ${imgN} imagem(ns)${vidN ? `, ${vidN} vídeo(s)` : ""}` : ""}). Use "Reescrever com IA" ou publique como carrossel.`,
       });
       setTimeout(() => setPublishMessage(null), 4000);
     } catch (e) {
@@ -994,6 +1284,45 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     }
   };
 
+  const mirrorCarouselVideoToCloudinary = async (
+    rawUrl: string,
+    index: number,
+  ): Promise<string | null> => {
+    try {
+      console.log(
+        "[editor-post] publishToInstagram: espelhando vídeo de carrossel na Cloudinary...",
+        {
+          index,
+          rawUrlPreview: rawUrl?.slice(0, 120),
+        },
+      );
+      const response = await fetch(rawUrl);
+      if (!response.ok) {
+        console.error(
+          "[editor-post] publishToInstagram: fetch do vídeo de carrossel falhou",
+          { index, status: response.status },
+        );
+        return null;
+      }
+      const blob = await response.blob();
+      const ext = guessVideoFileExtension(rawUrl, blob.type || "");
+      const upload = await uploadVideoToCloudinary(blob, {
+        fileName: `carousel-${index}.${ext}`,
+      });
+      return upload.secureUrl;
+    } catch (err) {
+      console.error(
+        "[editor-post] publishToInstagram: erro ao espelhar vídeo de carrossel na Cloudinary",
+        {
+          index,
+          rawUrlPreview: rawUrl?.slice(0, 120),
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+      return null;
+    }
+  };
+
   /**
    * Esconde temporariamente a UI do carrossel (setas/dots) dentro de um node
    * para que não apareça na captura via html-to-image.
@@ -1076,16 +1405,20 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
   const prepareCarouselTemplateForCapture = async (
     useCarouselNow: boolean,
   ): Promise<void> => {
+    const firstCarouselImage =
+      firstImageUrlFromCarouselMedia(fetchedCarouselMedia) ||
+      article.images?.[0]?.url?.trim() ||
+      "";
     const slide0Source =
-      replicateHeroImageUrl?.trim() || fetchedContentImageUrls[0] || "";
+      replicateHeroImageUrl?.trim() || firstCarouselImage || "";
     console.log("[editor-post] prepareCarouselTemplateForCapture: início", {
       useCarouselNow,
-      hasFirstImage: !!fetchedContentImageUrls[0],
+      hasFirstImage: !!firstCarouselImage,
       usingEpicOverride: Boolean(replicateHeroImageUrl?.trim()),
       firstImagePreview: slide0Source.slice(0, 200),
     });
 
-    if (!useCarouselNow || !fetchedContentImageUrls[0]) {
+    if (!useCarouselNow || !firstCarouselImage) {
       console.log(
         "[editor-post] prepareCarouselTemplateForCapture: não é carrossel ou não há primeira imagem, nada a fazer.",
       );
@@ -1230,8 +1563,8 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     const useCarousel =
       publishDestination === "feed" &&
       publishAsCarousel &&
-      fetchedContentImageUrls.length >= 2 &&
-      fetchedContentImageUrls.length <= 10;
+      fetchedCarouselMedia.length >= 2 &&
+      fetchedCarouselMedia.length <= 10;
     if (!hasCloudinaryConfig()) {
       console.warn(
         "[editor-post] publishToInstagram: Cloudinary não configurada",
@@ -1250,8 +1583,8 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       const useCarouselNow =
         publishDestination === "feed" &&
         publishAsCarousel &&
-        fetchedContentImageUrls.length >= 2 &&
-        fetchedContentImageUrls.length <= 10;
+        fetchedCarouselMedia.length >= 2 &&
+        fetchedCarouselMedia.length <= 10;
       if (isReels && useCarouselNow) {
         throw new Error("Reels não suporta carrossel. Desmarque a opção.");
       }
@@ -1388,32 +1721,45 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             "Não foi possível gerar a URL do template para o carrossel.",
           );
         }
-        const extraOriginalUrls = fetchedContentImageUrls.slice(1, 10);
-        const mirroredExtra: string[] = [];
-        for (let i = 0; i < extraOriginalUrls.length; i++) {
-          const uploadedUrl = await mirrorCarouselImageToCloudinary(
-            extraOriginalUrls[i],
-            i + 2,
-          );
-          if (uploadedUrl) {
-            mirroredExtra.push(uploadedUrl);
+        const extraOriginal = fetchedCarouselMedia.slice(1, 10);
+        const mirroredExtra: InstagramCarouselItem[] = [];
+        for (let i = 0; i < extraOriginal.length; i++) {
+          const item = extraOriginal[i];
+          if (item.kind === "image") {
+            const uploadedUrl = await mirrorCarouselImageToCloudinary(
+              item.url,
+              i + 2,
+            );
+            if (uploadedUrl)
+              mirroredExtra.push({ kind: "image", url: uploadedUrl });
+          } else {
+            const uploadedUrl = await mirrorCarouselVideoToCloudinary(
+              item.url,
+              i + 2,
+            );
+            if (uploadedUrl)
+              mirroredExtra.push({ kind: "video", url: uploadedUrl });
           }
         }
-        const carouselImages = [imageUrl, ...mirroredExtra];
-        if (carouselImages.length < 2) {
+        const carouselItems: InstagramCarouselItem[] = [
+          { kind: "image", url: imageUrl },
+          ...mirroredExtra,
+        ];
+        if (carouselItems.length < 2) {
           throw new Error(
-            "Carrossel precisa de pelo menos 2 imagens válidas (template + mais 1). Tente buscar o conteúdo novamente ou desmarque a opção de carrossel.",
+            "Carrossel precisa de pelo menos 2 mídias válidas (template + mais 1). Tente buscar o conteúdo novamente ou desmarque a opção de carrossel.",
           );
         }
         console.log(
           "[editor-post] publishToInstagram: publicando carrossel no Feed (primeira imagem com template)...",
           {
-            imageCount: carouselImages.length,
+            itemCount: carouselItems.length,
+            kinds: carouselItems.map((c) => c.kind),
             captionLength: (captionForInstagram || headline)?.length,
           },
         );
         await publishCarouselToInstagram({
-          imageUrls: carouselImages,
+          items: carouselItems,
           caption: captionForInstagram || headline,
           accessToken: config.accessToken,
           accountId: config.accountId,
@@ -1525,12 +1871,16 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       }
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
-      console.error("[editor-post] publishToInstagram: erro", {
-        message: err.message,
-        name: err.name,
-        stack: err.stack,
-        cause: err.cause,
-      });
+      console.error(
+        "[editor-post] publishToInstagram: erro (detalhe completo)",
+        {
+          message: err.message,
+          name: err.name,
+          stack: err.stack,
+          cause: err.cause,
+          raw: e,
+        },
+      );
       setPublishMessage({
         type: "error",
         text: err.message || "Erro ao publicar no Instagram.",
@@ -1553,7 +1903,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     console.log("[editor-post][DEBUG] debugCaptureCarouselTemplate: início", {
       destination: publishDestination,
       publishAsCarousel,
-      fetchedImagesCount: fetchedContentImageUrls.length,
+      fetchedMediaCount: fetchedCarouselMedia.length,
       hasPostRef: !!postRef.current,
       hasCloudinary: hasCloudinaryConfig(),
     });
@@ -1568,8 +1918,8 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     const useCarouselNow =
       publishDestination === "feed" &&
       publishAsCarousel &&
-      fetchedContentImageUrls.length >= 2 &&
-      fetchedContentImageUrls.length <= 10;
+      fetchedCarouselMedia.length >= 2 &&
+      fetchedCarouselMedia.length <= 10;
 
     await prepareCarouselTemplateForCapture(useCarouselNow);
 
@@ -1700,17 +2050,17 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     if (preferOriginal) {
       const original =
         article.images?.[0]?.url?.trim() ||
-        fetchedContentImageUrls[0]?.trim() ||
+        firstImageUrlFromCarouselMedia(fetchedCarouselMedia)?.trim() ||
         "";
       if (original && !original.includes("picsum.photos")) return original;
     }
     const fromPreview =
       carouselCaptureImageDataUrl?.trim() ||
       replicateHeroImageUrl?.trim() ||
-      (publishAsCarousel && fetchedContentImageUrls.length >= 2
-        ? fetchedContentImageUrls[0]?.trim()
+      (publishAsCarousel && fetchedCarouselMedia.length >= 2
+        ? firstImageUrlFromCarouselMedia(fetchedCarouselMedia)?.trim()
         : article.images?.[0]?.url?.trim() ||
-          fetchedContentImageUrls[0]?.trim()) ||
+          firstImageUrlFromCarouselMedia(fetchedCarouselMedia)?.trim()) ||
       "";
     return fromPreview;
   };
@@ -1829,7 +2179,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
         new Set([baseSource, ...uniqueGenerated]),
       ).slice(0, 10);
       if (carouselPool.length >= 2) {
-        setFetchedContentImageUrls(carouselPool);
+        setFetchedCarouselMedia(
+          carouselPool.map((url) => ({ kind: "image" as const, url })),
+        );
         setPublishAsCarousel(true);
         setCarouselPreviewIndex(0);
       }
@@ -1861,10 +2213,11 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       ? carouselCaptureImageDataUrl
       : replicateHeroImageUrl
         ? replicateHeroImageUrl
-        : publishAsCarousel && fetchedContentImageUrls.length >= 2
-          ? fetchedContentImageUrls[0]
+        : publishAsCarousel && fetchedCarouselMedia.length >= 2
+          ? firstImageUrlFromCarouselMedia(fetchedCarouselMedia) ||
+            article.images?.[0]?.url
           : article.images?.[0]?.url ||
-            fetchedContentImageUrls[0] ||
+            firstImageUrlFromCarouselMedia(fetchedCarouselMedia) ||
             "https://picsum.photos/seed/nfl/800/800";
     const team = teamBrand;
     const contractingTeam = selectedTeamForLogo;
@@ -1893,6 +2246,8 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
     const marginPx = textMargin;
     const logoPx = (base: number) => Math.round((base * teamLogoScale) / 100);
+    /** 0 = foto sem escurecimento, 1 = intensidade máxima do overlay (como no design original). */
+    const overlayMult = imageOverlayOpacity / 100;
 
     switch (activeStyle) {
       case "BREAKING":
@@ -1909,7 +2264,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 referrerPolicy="no-referrer"
                 style={imageObjectPositionStyle}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="relative mt-auto flex flex-col gap-2"
@@ -1951,191 +2309,172 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             </div>
           </div>
         );
-      case "TRADED":
+      case "TRADED": {
+        const fromTeam = team;
+        const toTeam = contractingTeam ?? team;
+        const ringA = logoPx(100);
+        const ringB = logoPx(100);
         return (
-          <div
-            className="relative w-full h-full overflow-hidden flex"
-            style={{ backgroundColor: (contractingTeam ?? team).primary }}
-          >
-            <div className="w-1/2 h-full relative">
-              <img
-                src={imageUrl}
-                alt=""
-                className={cn("w-full h-full object-cover", imagePositionClass)}
-                referrerPolicy="no-referrer"
-                style={imageObjectPositionStyle}
-              />
+          <div className="relative w-full h-full overflow-hidden bg-[#050508]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover scale-[1.02]",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 flex"
+              style={{ opacity: overlayMult }}
+            >
               <div
-                className="absolute inset-0"
+                className="flex-1 h-full"
                 style={{
-                  background: `linear-gradient(to right, transparent, ${(contractingTeam ?? team).primary})`,
+                  background: `linear-gradient(135deg, ${fromTeam.primary}cc 0%, transparent 72%)`,
                 }}
               />
-              {contractingTeam && (
-                <div className="absolute top-4 left-4">
-                  <TeamBranding
-                    team={team}
-                    style={{ width: logoPx(48), height: logoPx(48) }}
-                    initialsSize="xs"
-                  />
-                </div>
-              )}
+              <div
+                className="flex-1 h-full"
+                style={{
+                  background: `linear-gradient(-135deg, ${toTeam.primary}cc 0%, transparent 72%)`,
+                }}
+              />
             </div>
             <div
-              className="w-1/2 h-full flex flex-col justify-center relative"
+              className="absolute inset-0 bg-gradient-to-t from-black via-black/55 to-black/25"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center z-10"
               style={{ padding: `${marginPx}px` }}
             >
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                <div className="text-8xl font-black text-white rotate-90 origin-top-right">
-                  TRADED
+              <div
+                className="mb-8 inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-white/20 bg-black/50 backdrop-blur-md shadow-lg"
+                style={{ ...badgeStyles }}
+              >
+                <span className="text-[10px] font-black uppercase tracking-[0.35em] text-white/90">
+                  {badgeText || "TRADE"}
+                </span>
+              </div>
+              <div className="flex items-center justify-center gap-4 sm:gap-8 w-full max-w-[min(100%,520px)]">
+                <div className="flex flex-col items-center gap-2 flex-1 min-w-0">
+                  <div
+                    className="relative rounded-full p-1"
+                    style={{
+                      background: `linear-gradient(145deg, ${fromTeam.secondary}, ${fromTeam.primary})`,
+                      boxShadow: `0 0 40px ${fromTeam.primary}66`,
+                    }}
+                  >
+                    <div
+                      className="rounded-full bg-black/60 p-2 flex items-center justify-center shrink-0"
+                      style={{
+                        width: ringA,
+                        height: ringA,
+                        maxWidth: "min(42vw, 140px)",
+                        maxHeight: "min(42vw, 140px)",
+                      }}
+                    >
+                      {!hideTeamLogo && fromTeam.logo ? (
+                        <img
+                          src={fromTeam.logo}
+                          alt=""
+                          className="w-[82%] h-[82%] object-contain drop-shadow-xl"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <span
+                          className="text-white font-black text-3xl tabular-nums"
+                          style={{ color: fromTeam.secondary }}
+                        >
+                          {fromTeam.initials}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-white/90 truncate max-w-full px-1 drop-shadow">
+                    {fromTeam.name}
+                  </span>
+                  <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
+                    Origem
+                  </span>
+                </div>
+                <div className="flex flex-col items-center justify-center shrink-0 gap-2">
+                  <ArrowRight
+                    className="w-10 h-10 sm:w-14 sm:h-14 text-white drop-shadow-2xl"
+                    strokeWidth={2.5}
+                  />
+                  <span className="text-[9px] font-black uppercase tracking-[0.5em] text-nfl-red">
+                    NFL
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-2 flex-1 min-w-0">
+                  <div
+                    className="relative rounded-full p-1"
+                    style={{
+                      background: `linear-gradient(145deg, ${toTeam.secondary}, ${toTeam.primary})`,
+                      boxShadow: `0 0 40px ${toTeam.primary}66`,
+                    }}
+                  >
+                    <div
+                      className="rounded-full bg-black/60 p-2 flex items-center justify-center shrink-0"
+                      style={{
+                        width: ringB,
+                        height: ringB,
+                        maxWidth: "min(42vw, 140px)",
+                        maxHeight: "min(42vw, 140px)",
+                      }}
+                    >
+                      {!hideTeamLogo && toTeam.logo ? (
+                        <img
+                          src={toTeam.logo}
+                          alt=""
+                          className="w-[82%] h-[82%] object-contain drop-shadow-xl"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <span
+                          className="text-white font-black text-3xl tabular-nums"
+                          style={{ color: toTeam.secondary }}
+                        >
+                          {toTeam.initials}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-white/90 truncate max-w-full px-1 drop-shadow">
+                    {toTeam.name}
+                  </span>
+                  <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
+                    {contractingTeam ? "Destino" : "Destino (time)"}
+                  </span>
                 </div>
               </div>
-              <div className="relative z-10">
-                <div className="text-white/60 font-bold uppercase tracking-widest text-xs mb-2">
-                  {(contractingTeam ?? team).name}
-                </div>
-                <div className="text-white font-black text-4xl uppercase mb-6">
-                  NEWS
-                </div>
-                <div className="mb-8 flex items-center justify-center gap-3">
-                  {contractingTeam ? (
-                    <>
-                      <TeamBranding
-                        team={team}
-                        style={{ width: logoPx(48), height: logoPx(48) }}
-                        initialsSize="xs"
-                      />
-                      <span className="text-white/50 text-xl">â†’</span>
-                      <TeamBranding
-                        team={contractingTeam}
-                        style={{ width: logoPx(64), height: logoPx(64) }}
-                      />
-                    </>
-                  ) : (
-                    <TeamBranding
-                      team={team}
-                      style={{ width: logoPx(64), height: logoPx(64) }}
-                    />
-                  )}
-                </div>
-                {/* <div
-                  className="p-4 font-black uppercase text-center"
-                  style={{
-                    ...badgeStyles,
-                    backgroundColor: (contractingTeam ?? team).secondary,
-                    color: (contractingTeam ?? team).primary,
-                  }}
-                >
-                  {badgeText}
-                </div> */}
-                <div
+              <div className="mt-auto pt-8 w-full">
+                <h2
                   className={cn(
-                    "mt-4 text-white font-bold tracking-tighter",
+                    "text-white font-black leading-[0.95] tracking-tight drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)]",
                     headlineFont,
                   )}
-                  style={headlineStyles}
+                  style={{
+                    ...headlineStyles,
+                    textShadow:
+                      "0 2px 0 rgba(0,0,0,0.85), 0 0 48px rgba(0,0,0,0.55)",
+                  }}
                 >
                   {headline}
-                </div>
+                </h2>
+                {subtext?.trim() ? (
+                  <p
+                    className="mt-3 text-white/70 text-xs sm:text-sm font-medium leading-snug text-balance"
+                    style={subtextStyles}
+                  >
+                    {subtext}
+                  </p>
+                ) : null}
               </div>
-            </div>
-          </div>
-        );
-      case "TRADED_CARD": {
-        // Para este template, usamos o subtext como
-        // "Nome do jogador, Posição" e quebramos em duas partes.
-        const [playerNameRaw, ...playerRest] = (subtext || "").split(",");
-        const playerName = playerNameRaw?.trim();
-        const playerPosition = playerRest.join(",").trim();
-
-        return (
-          <div className="relative w-full h-full bg-black overflow-hidden flex flex-col">
-            {/* Foto ocupando o topo */}
-            <div className="relative flex-1 min-h-0">
-              <img
-                src={imageUrl}
-                alt=""
-                className={cn("w-full h-full object-cover", imagePositionClass)}
-                referrerPolicy="no-referrer"
-                style={imageObjectPositionStyle}
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
-            </div>
-            {/* Faixa com logos e setas */}
-            <div className="relative z-10 bg-black flex items-center justify-center gap-4 py-3">
-              <TeamBranding
-                team={team}
-                style={{ width: logoPx(40), height: logoPx(40) }}
-                initialsSize="xs"
-              />
-              <span className="flex-shrink-0 text-white/80">
-                {/* Chevron/seta estilizada entre os times */}
-                <svg
-                  width="28"
-                  height="28"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M9 6L15 12L9 18"
-                    stroke="currentColor"
-                    strokeWidth="2.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M12.5 6.5L18.2 12L12.5 17.5"
-                    stroke="currentColor"
-                    strokeWidth="2.0"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    opacity="0.55"
-                  />
-                </svg>
-              </span>
-              <TeamBranding
-                team={contractingTeam ?? team}
-                style={{ width: logoPx(40), height: logoPx(40) }}
-                initialsSize="xs"
-              />
-            </div>
-            {/* Bloco inferior com TROCADO + nome/posição */}
-            <div className="relative z-10 bg-black flex flex-col items-center justify-center px-6 py-6">
-              {/* Badge pequeno controlado por badgeSize / badgeSkew */}
-              <div
-                className="px-3 py-1 rounded-sm mb-3 inline-flex items-center justify-center"
-                style={{
-                  ...badgeStyles,
-                  backgroundColor: "#D50A0A",
-                  color: "#ffffff",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.25em",
-                  fontWeight: 900,
-                  fontSize: `${badgeSize}px`,
-                }}
-              >
-                {badgeText || "TROCADO"}
-              </div>
-              {/* Título principal (TROCADO) controlado por Tipografia */}
-
-              {(playerName || playerPosition) && (
-                <p
-                  className="mt-3 font-bold uppercase text-white/80 text-center"
-                  style={subtextStyles}
-                >
-                  <span className="tracking-[0.25em]">
-                    {(playerName || "").toUpperCase()}
-                  </span>
-                  {playerPosition && (
-                    <span className="text-white/70">
-                      {playerName ? ", " : ""}
-                      {playerPosition.toUpperCase()}
-                    </span>
-                  )}
-                </p>
-              )}
             </div>
           </div>
         );
@@ -2150,7 +2489,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black" />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black"
+              style={{ opacity: overlayMult }}
+            />
             <div
               className="absolute inset-0 flex flex-col items-center justify-center text-center"
               style={{ padding: `${marginPx}px` }}
@@ -2278,7 +2620,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 referrerPolicy="no-referrer"
                 style={imageObjectPositionStyle}
               />
-              <div className="absolute inset-0 bg-black/40" />
+              <div
+                className="absolute inset-0 bg-black/40"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div className="relative z-10">
               <div className="text-white/20 text-9xl font-serif absolute -top-12 -left-8">
@@ -2320,6 +2665,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               <div
                 className="absolute inset-0"
                 style={{
+                  opacity: overlayMult,
                   background: `linear-gradient(to right, transparent, ${(contractingTeam ?? team).primary})`,
                 }}
               />
@@ -2435,6 +2781,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               <div
                 className="absolute inset-0"
                 style={{
+                  opacity: overlayMult,
                   background: `linear-gradient(to right, transparent, ${(contractingTeam ?? team).primary})`,
                 }}
               />
@@ -2528,7 +2875,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent" />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent"
+              style={{ opacity: overlayMult }}
+            />
             <div
               className="absolute bottom-0 left-0 right-0"
               style={{ padding: `${marginPx}px` }}
@@ -2624,6 +2974,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             <div
               className="absolute inset-0"
               style={{
+                opacity: overlayMult,
                 background: `linear-gradient(to bottom, transparent, ${team.primary})`,
               }}
             />
@@ -2775,7 +3126,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 )}
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="shrink-0 border-t border-white/20"
@@ -2812,6 +3166,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             <div
               className="absolute inset-0"
               style={{
+                opacity: overlayMult,
                 background: `linear-gradient(135deg, ${team.primary}99 0%, transparent 20%, black 100%)`,
               }}
             />
@@ -2952,7 +3307,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 className={cn("w-full h-full object-cover", imagePositionClass)}
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
               <div
                 className="absolute bottom-0 left-0 right-0 flex flex-col items-center text-center"
                 style={{ padding: `${marginPx}px` }}
@@ -3190,7 +3548,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   filter: "sepia(0.25) contrast(1.05)",
                 }}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#f5f0e6] via-transparent to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-[#f5f0e6] via-transparent to-transparent"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="relative bg-[#f5f0e6] text-amber-900"
@@ -3247,7 +3608,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 className={cn("w-full h-full object-cover", imagePositionClass)}
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
               <div
                 className="absolute bottom-0 left-0 right-0 flex flex-col items-center text-center"
                 style={{ padding: `${marginPx}px` }}
@@ -3290,7 +3654,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 referrerPolicy="no-referrer"
                 style={imageObjectPositionStyle}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="relative z-10 mt-auto shrink-0 flex flex-col items-center justify-center text-center rounded-t-[2rem]"
@@ -3438,7 +3805,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent" />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent"
+              style={{ opacity: overlayMult }}
+            />
             <div
               className="absolute bottom-0 left-0 right-0 flex flex-col items-center text-center"
               style={{ padding: `${marginPx}px` }}
@@ -3582,7 +3952,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
-            <div className="absolute inset-0 bg-radial from-white/10 via-transparent to-black" />
+            <div
+              className="absolute inset-0 bg-radial from-white/10 via-transparent to-black"
+              style={{ opacity: overlayMult }}
+            />
             <div
               className="relative z-10 w-full h-full flex flex-col items-center justify-center text-center"
               style={{ padding: `${marginPx}px` }}
@@ -3632,7 +4005,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 style={imageObjectPositionStyle}
               />
               {/* Overlay em cima da imagem toda (melhora legibilidade do texto). */}
-              <div className="absolute inset-0 bg-black/45" />
+              <div
+                className="absolute inset-0 bg-black/45"
+                style={{ opacity: overlayMult }}
+              />
             </div>
 
             {/* Painel de texto (mantém textos/estilos como estavam) */}
@@ -3691,7 +4067,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
-            <div className="absolute inset-0 bg-black/40" />
+            <div
+              className="absolute inset-0 bg-black/40"
+              style={{ opacity: overlayMult }}
+            />
             <div
               className="absolute bottom-0 left-0 right-0"
               style={{ padding: `${marginPx}px` }}
@@ -3735,7 +4114,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 referrerPolicy="no-referrer"
                 style={imageObjectPositionStyle}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="relative z-10 w-full h-full flex flex-col"
@@ -3791,7 +4173,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 referrerPolicy="no-referrer"
                 style={imageObjectPositionStyle}
               />
-              <div className="absolute inset-0 bg-gradient-to-tr from-black via-black/70 to-transparent" />
+              <div
+                className="absolute inset-0 bg-gradient-to-tr from-black via-black/70 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
             </div>
             <div
               className="relative z-10 w-full h-full flex flex-col"
@@ -3898,7 +4283,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/65" />
+                <div
+                  className="absolute inset-0 bg-black/65"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
 
               {/* Barra superior: status + data + local */}
@@ -4098,7 +4486,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/65" />
+                <div
+                  className="absolute inset-0 bg-black/65"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
 
               <div className="relative z-10 text-nfl-red font-black uppercase tracking-widest text-sm drop-shadow-md">
@@ -4187,7 +4578,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
 
               {/* Título */}
@@ -4353,7 +4747,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/65" />
+                <div
+                  className="absolute inset-0 bg-black/65"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex-1 flex items-center justify-center gap-4 md:gap-6">
                 <div
@@ -4470,7 +4867,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-3">
                 <div
@@ -4573,7 +4973,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-3">
                 <div
@@ -4689,7 +5092,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/65" />
+                <div
+                  className="absolute inset-0 bg-black/65"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 rounded-xl border border-white/20 bg-black/50 backdrop-blur-md p-4 flex flex-col gap-4">
                 <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] text-white/80">
@@ -4788,7 +5194,12 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
           };
           const bgImg =
             "https://res.cloudinary.com/dc7j2rlyf/image/upload/v1772982106/ChatGPT_Image_8_de_mar._de_2026_12_01_15_zhvjdx.png";
-          const overlay = <div className="absolute inset-0 bg-black/70" />;
+          const overlay = (
+            <div
+              className="absolute inset-0 bg-black/70"
+              style={{ opacity: overlayMult }}
+            />
+          );
           if (activeStyle === "BOX_SCORE") {
             const teams = summary.boxscore?.teams ?? [];
             return (
@@ -5110,7 +5521,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-black/70" />
+                  <div
+                    className="absolute inset-0 bg-black/70"
+                    style={{ opacity: overlayMult }}
+                  />
                 </div>
                 <div className="relative z-10 flex items-center gap-3 mb-3">
                   <div
@@ -5171,7 +5585,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-black/70" />
+                  <div
+                    className="absolute inset-0 bg-black/70"
+                    style={{ opacity: overlayMult }}
+                  />
                 </div>
                 <div className="relative z-10 flex items-center gap-3 mb-3">
                   <div
@@ -5225,7 +5642,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-black/70" />
+                  <div
+                    className="absolute inset-0 bg-black/70"
+                    style={{ opacity: overlayMult }}
+                  />
                 </div>
                 <div className="relative z-10 flex items-center gap-3 mb-3">
                   <div
@@ -5285,7 +5705,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-3">
                 <div
@@ -5364,7 +5787,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-3">
                 <div
@@ -5437,7 +5863,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/75" />
+                <div
+                  className="absolute inset-0 bg-black/75"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5491,7 +5920,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-3">
                 <div
@@ -5552,7 +5984,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5618,7 +6053,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5672,7 +6110,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 {!hideTeamLogo && team.logo && (
@@ -5734,7 +6175,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5788,7 +6232,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5849,7 +6296,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 {!hideTeamLogo && team.logo && (
@@ -5924,7 +6374,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -5976,7 +6429,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -6030,7 +6486,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute inset-0 bg-black/70" />
+                <div
+                  className="absolute inset-0 bg-black/70"
+                  style={{ opacity: overlayMult }}
+                />
               </div>
               <div className="relative z-10 flex items-center gap-3 mb-2">
                 <div
@@ -6055,6 +6514,1342 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             </div>
           );
         })();
+      case "STADIUM_NIGHT":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#050a14]">
+            <div className="absolute inset-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 opacity-40"
+                style={{
+                  background:
+                    "repeating-linear-gradient(125deg, transparent 0, transparent 40px, rgba(212,175,55,0.06) 40px, rgba(212,175,55,0.06) 42px)",
+                }}
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-t from-[#050a14] via-[#050a14]/70 to-transparent"
+                style={{ opacity: overlayMult }}
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-blue-900/20"
+                style={{ opacity: overlayMult }}
+              />
+            </div>
+            <div
+              className="absolute top-0 left-0 right-0 h-1"
+              style={{
+                background:
+                  "linear-gradient(90deg, transparent, #d4af37, #f5e6a3, #d4af37, transparent)",
+              }}
+            />
+            <div
+              className="relative z-10 flex items-start justify-between gap-3"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <span className="text-[9px] font-black uppercase tracking-[0.35em] text-amber-200/90 drop-shadow-md">
+                NFL Insider
+              </span>
+              <TeamBranding
+                team={team}
+                style={{ width: logoPx(44), height: logoPx(44) }}
+                initialsSize="xs"
+              />
+            </div>
+            <div
+              className="absolute bottom-0 left-0 right-0 z-10"
+              style={{ padding: `${marginPx}px`, paddingBottom: marginPx + 8 }}
+            >
+              <div
+                className="inline-block px-3 py-1 mb-3 rounded-sm border border-amber-400/50 bg-black/50 backdrop-blur-sm"
+                style={badgeStyles}
+              >
+                <span
+                  className="text-amber-100 font-black uppercase tracking-widest"
+                  style={{ fontSize: `${Math.min(badgeSize, 22)}px` }}
+                >
+                  {badgeText}
+                </span>
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-[1.05] tracking-tight drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)]",
+                  headlineFont,
+                )}
+                style={{
+                  ...headlineStyles,
+                  textShadow:
+                    "0 0 40px rgba(212,175,55,0.25), 0 2px 0 rgba(0,0,0,0.8)",
+                }}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-3 text-white/75 text-xs font-medium leading-snug max-w-[95%] border-l-2 border-amber-500/80 pl-3"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        );
+      case "TABLOID_EXTRA":
+        return (
+          <div className="relative w-full h-full flex flex-col overflow-hidden bg-white">
+            <div
+              className="shrink-0 border-b-4 border-black bg-white px-3 py-2"
+              style={{
+                paddingLeft: marginPx * 0.5,
+                paddingRight: marginPx * 0.5,
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-black font-black text-lg md:text-xl uppercase tracking-tighter leading-none">
+                  NFL <span className="text-red-600">EXTRA</span>
+                </span>
+                <span className="text-[8px] font-bold uppercase tracking-widest text-zinc-500 whitespace-nowrap">
+                  {team.name}
+                </span>
+              </div>
+              <div className="h-0.5 w-full bg-red-600 mt-1.5" />
+            </div>
+            <div className="relative flex-1 min-h-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div className="absolute top-3 left-3 rotate-[-8deg]">
+                <span className="inline-block bg-red-600 text-white font-black text-[10px] uppercase px-2 py-1 shadow-lg border-2 border-white">
+                  {badgeText}
+                </span>
+              </div>
+            </div>
+            <div
+              className="shrink-0 bg-red-600 text-white border-t-4 border-black"
+              style={{ padding: `${Math.max(12, marginPx * 0.75)}px` }}
+            >
+              <h2
+                className={cn(
+                  "font-black leading-tight tracking-tight",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-2 text-white/95 text-xs font-bold leading-snug line-clamp-4"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-90">
+                  Leia mais · {team.initials}
+                </span>
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(32), height: logoPx(32) }}
+                  initialsSize="xs"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "GLASS_HUD":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-zinc-950">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "w-full h-full object-cover scale-105",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-black/45"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-0 flex items-center justify-center p-6"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="relative max-w-[92%] w-full rounded-2xl border border-white/25 bg-white/10 backdrop-blur-xl shadow-[0_25px_80px_rgba(0,0,0,0.5)] px-5 py-6">
+                <div
+                  className="absolute -top-px -left-px w-6 h-6 border-t-2 border-l-2 border-cyan-400/90 rounded-tl-lg"
+                  aria-hidden
+                />
+                <div
+                  className="absolute -top-px -right-px w-6 h-6 border-t-2 border-r-2 border-cyan-400/90 rounded-tr-lg"
+                  aria-hidden
+                />
+                <div
+                  className="absolute -bottom-px -left-px w-6 h-6 border-b-2 border-l-2 border-cyan-400/90 rounded-bl-lg"
+                  aria-hidden
+                />
+                <div
+                  className="absolute -bottom-px -right-px w-6 h-6 border-b-2 border-r-2 border-cyan-400/90 rounded-br-lg"
+                  aria-hidden
+                />
+                <div className="flex items-center justify-between gap-2 mb-4">
+                  <span className="text-cyan-300 font-mono text-[9px] uppercase tracking-[0.4em]">
+                    ◆ {badgeText}
+                  </span>
+                  <TeamBranding
+                    team={team}
+                    style={{ width: logoPx(36), height: logoPx(36) }}
+                    initialsSize="xs"
+                  />
+                </div>
+                <h2
+                  className={cn(
+                    "text-white font-bold leading-snug text-balance",
+                    headlineFont,
+                  )}
+                  style={headlineStyles}
+                >
+                  {headline}
+                </h2>
+                {subtext ? (
+                  <p
+                    className="mt-3 text-white/70 text-xs leading-relaxed border-t border-white/15 pt-3"
+                    style={subtextStyles}
+                  >
+                    {subtext}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        );
+      case "TURF_STRIP":
+        return (
+          <div className="relative w-full h-full flex flex-col overflow-hidden bg-black">
+            <div className="relative flex-[1.85] min-h-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80"
+                style={{ opacity: overlayMult }}
+              />
+              <div
+                className="absolute top-4 left-4 right-4 flex justify-between items-start"
+                style={{ gap: 8 }}
+              >
+                <span
+                  className="px-2 py-0.5 rounded bg-black/60 text-white text-[9px] font-black uppercase tracking-widest border border-white/20"
+                  style={badgeStyles}
+                >
+                  {badgeText}
+                </span>
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+              </div>
+            </div>
+            <div
+              className="relative flex-1 min-h-[28%] flex flex-col justify-center"
+              style={{
+                background:
+                  "linear-gradient(180deg, #0f2918 0%, #14532d 40%, #166534 100%)",
+                boxShadow: "inset 0 12px 24px rgba(0,0,0,0.35)",
+              }}
+            >
+              <div
+                className="absolute inset-0 opacity-25 pointer-events-none"
+                style={{
+                  backgroundImage:
+                    "repeating-linear-gradient(90deg, transparent, transparent 11px, rgba(255,255,255,0.12) 11px, rgba(255,255,255,0.12) 12px)",
+                }}
+              />
+              <div
+                className="absolute top-2 left-0 right-0 h-px bg-white/30"
+                aria-hidden
+              />
+              <div
+                className="relative z-10 text-center px-4"
+                style={{ paddingLeft: marginPx, paddingRight: marginPx }}
+              >
+                <h2
+                  className={cn(
+                    "text-white font-black leading-tight drop-shadow-lg",
+                    headlineFont,
+                  )}
+                  style={headlineStyles}
+                >
+                  {headline}
+                </h2>
+                {subtext ? (
+                  <p
+                    className="mt-2 text-emerald-100/90 text-xs font-semibold line-clamp-3"
+                    style={subtextStyles}
+                  >
+                    {subtext}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        );
+      case "CINEMA_LETTERBOX":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
+            <div className="shrink-0 h-[10%] min-h-[28px] bg-black z-20 flex items-end justify-center pb-1">
+              <span className="text-[8px] text-zinc-600 font-mono uppercase tracking-[0.5em]">
+                {team.name}
+              </span>
+            </div>
+            <div className="relative flex-1 min-h-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 bg-radial from-transparent via-black/30 to-black/75"
+                style={{ opacity: overlayMult }}
+              />
+              <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center text-center px-4"
+                style={{ padding: `${marginPx}px` }}
+              >
+                <span className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-amber-200/90 drop-shadow-lg">
+                  {badgeText}
+                </span>
+                <h2
+                  className={cn(
+                    "text-white font-bold leading-tight max-w-[95%]",
+                    headlineFont,
+                  )}
+                  style={{
+                    ...headlineStyles,
+                    textShadow:
+                      "0 4px 30px rgba(0,0,0,0.95), 0 0 60px rgba(251,191,36,0.15)",
+                  }}
+                >
+                  {headline}
+                </h2>
+                {subtext ? (
+                  <p
+                    className="mt-4 text-white/80 text-xs max-w-lg leading-relaxed"
+                    style={subtextStyles}
+                  >
+                    {subtext}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="shrink-0 h-[10%] min-h-[28px] bg-black z-20 flex items-start justify-center pt-2">
+              <TeamBranding
+                team={team}
+                style={{ width: logoPx(28), height: logoPx(28) }}
+                initialsSize="xs"
+              />
+            </div>
+          </div>
+        );
+      case "MAGAZINE_COVER":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#f4f1ea] flex">
+            <div
+              className="w-3 shrink-0 h-full"
+              style={{ backgroundColor: team.primary }}
+            />
+            <div className="flex-1 min-w-0 flex flex-col">
+              <div
+                className="shrink-0 flex items-end justify-between gap-2 border-b-2 border-black/90 pb-2 pt-3 px-3"
+                style={{
+                  paddingLeft: marginPx * 0.6,
+                  paddingRight: marginPx * 0.6,
+                }}
+              >
+                <div>
+                  <span className="block text-[9px] font-bold uppercase tracking-[0.4em] text-black/50">
+                    NFL Annual
+                  </span>
+                  <span className="block text-3xl font-black text-black leading-none tracking-tighter">
+                    {badgeText}
+                  </span>
+                </div>
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+              </div>
+              <div className="relative flex-1 min-h-0">
+                <img
+                  src={imageUrl}
+                  alt=""
+                  className={cn(
+                    "w-full h-full object-cover",
+                    imagePositionClass,
+                  )}
+                  referrerPolicy="no-referrer"
+                  style={imageObjectPositionStyle}
+                />
+                <div
+                  className="absolute inset-0 bg-gradient-to-t from-[#f4f1ea] via-transparent to-transparent"
+                  style={{ opacity: overlayMult }}
+                />
+              </div>
+              <div
+                className="shrink-0 bg-[#f4f1ea] text-black"
+                style={{ padding: `${Math.max(14, marginPx * 0.85)}px` }}
+              >
+                <h2
+                  className={cn(
+                    "font-bold leading-[1.15] tracking-tight",
+                    headlineFont,
+                  )}
+                  style={headlineStyles}
+                >
+                  {headline}
+                </h2>
+                {subtext ? (
+                  <p
+                    className="mt-2 text-black/65 text-xs leading-snug border-l-2 border-black/30 pl-3"
+                    style={subtextStyles}
+                  >
+                    {subtext}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        );
+      case "PLAYOFF_BRACKET":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#0a0a0c]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "w-full h-full object-cover opacity-55",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-black/80 via-[#0a0a0c]/90 to-black"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-4 border-2 border-white/25 rounded-sm pointer-events-none"
+              aria-hidden
+            />
+            <div
+              className="absolute top-6 left-6 w-10 h-10 border-t-4 border-l-4 border-red-600 rounded-tl-md"
+              aria-hidden
+            />
+            <div
+              className="absolute top-6 right-6 w-10 h-10 border-t-4 border-r-4 border-red-600 rounded-tr-md"
+              aria-hidden
+            />
+            <div
+              className="absolute bottom-6 left-6 w-10 h-10 border-b-4 border-l-4 border-red-600 rounded-bl-md"
+              aria-hidden
+            />
+            <div
+              className="absolute bottom-6 right-6 w-10 h-10 border-b-4 border-r-4 border-red-600 rounded-br-md"
+              aria-hidden
+            />
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center z-10 px-4"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <span className="mb-4 px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.35em] text-white bg-red-600 shadow-lg">
+                {badgeText}
+              </span>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight max-w-[96%] drop-shadow-[0_4px_24px_rgba(0,0,0,1)]",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-4 text-white/75 text-xs font-medium max-w-md leading-relaxed"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-6">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(48), height: logoPx(48) }}
+                  initialsSize="sm"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "CHROME_FLARE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-zinc-950 p-[10px]">
+            <div
+              className="relative w-full h-full rounded-2xl overflow-hidden"
+              style={{
+                boxShadow:
+                  "inset 0 0 0 2px rgba(255,255,255,0.35), inset 0 0 40px rgba(180,200,255,0.12), 0 0 0 1px rgba(0,0,0,0.8)",
+                background:
+                  "linear-gradient(145deg, #e8ecf4 0%, #9ca3af 25%, #d1d5db 50%, #6b7280 75%, #374151 100%)",
+              }}
+            >
+              <div className="absolute inset-[3px] rounded-[13px] overflow-hidden bg-black">
+                <img
+                  src={imageUrl}
+                  alt=""
+                  className={cn(
+                    "w-full h-full object-cover",
+                    imagePositionClass,
+                  )}
+                  referrerPolicy="no-referrer"
+                  style={imageObjectPositionStyle}
+                />
+                <div
+                  className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent"
+                  style={{ opacity: overlayMult }}
+                />
+                <div
+                  className="absolute bottom-0 left-0 right-0 z-10"
+                  style={{ padding: `${marginPx}px` }}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <span
+                      className="font-black uppercase tracking-widest text-white drop-shadow-md"
+                      style={{
+                        fontSize: `${Math.min(badgeSize, 22)}px`,
+                        textShadow: "0 0 20px rgba(255,255,255,0.4)",
+                      }}
+                    >
+                      {badgeText}
+                    </span>
+                    <TeamBranding
+                      team={team}
+                      style={{ width: logoPx(36), height: logoPx(36) }}
+                      initialsSize="xs"
+                    />
+                  </div>
+                  <h2
+                    className={cn(
+                      "text-white font-black leading-tight",
+                      headlineFont,
+                    )}
+                    style={{
+                      ...headlineStyles,
+                      textShadow:
+                        "0 2px 0 rgba(0,0,0,0.9), 0 0 24px rgba(255,255,255,0.15)",
+                    }}
+                  >
+                    {headline}
+                  </h2>
+                  {subtext ? (
+                    <p
+                      className="mt-2 text-zinc-200/90 text-xs font-semibold line-clamp-3"
+                      style={subtextStyles}
+                    >
+                      {subtext}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      case "RED_ZONE_BAR":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
+            <div className="relative flex-1 min-h-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/90"
+                style={{ opacity: overlayMult }}
+              />
+              <div
+                className="absolute top-4 left-4 right-4 flex items-center gap-2"
+                style={{ gap: 10 }}
+              >
+                <span className="px-2 py-0.5 rounded bg-red-600 text-white text-[9px] font-black uppercase animate-none">
+                  {badgeText}
+                </span>
+                <span className="text-white/90 text-[10px] font-bold uppercase tracking-wider truncate">
+                  {team.name}
+                </span>
+              </div>
+            </div>
+            <div
+              className="shrink-0 bg-[#b91c1c] border-t-4 border-amber-400 shadow-[0_-8px_32px_rgba(0,0,0,0.6)]"
+              style={{ padding: `${Math.max(14, marginPx * 0.75)}px` }}
+            >
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight tracking-tight",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-2 text-amber-100/95 text-[11px] font-semibold leading-snug line-clamp-3"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-3 flex items-center justify-between border-t border-white/20 pt-2">
+                <span className="text-[8px] text-white/70 font-mono uppercase tracking-[0.3em]">
+                  NFL Network style
+                </span>
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(32), height: logoPx(32) }}
+                  initialsSize="xs"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "HALFTONE_POP":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#1a1025]">
+            <div className="absolute inset-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 mix-blend-multiply"
+                style={{
+                  backgroundColor: team.primary,
+                  opacity: overlayMult * 0.9,
+                }}
+              />
+              <div
+                className="absolute inset-0"
+                style={{
+                  opacity: overlayMult * 0.35,
+                  backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.9) 1px, transparent 1px)`,
+                  backgroundSize: "6px 6px",
+                }}
+              />
+            </div>
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="bg-yellow-400 text-black px-4 py-3 rounded-sm shadow-[6px_6px_0_rgba(0,0,0,0.85)] border-2 border-black -rotate-1 max-w-[98%]">
+                <span className="inline-block mb-2 px-2 py-0.5 bg-black text-yellow-400 text-[10px] font-black uppercase tracking-widest">
+                  {badgeText}
+                </span>
+                <h2
+                  className={cn(
+                    "font-black leading-[0.95] tracking-tighter",
+                    headlineFont,
+                  )}
+                  style={headlineStyles}
+                >
+                  {headline}
+                </h2>
+              </div>
+              {subtext ? (
+                <p
+                  className="mt-3 text-white text-xs font-bold leading-snug drop-shadow-md max-w-[95%]"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-3 flex justify-end">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "NFL_SUNDAY_SLATE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#0a1628]">
+            <div
+              className="absolute inset-0 opacity-[0.07] pointer-events-none"
+              style={{
+                backgroundImage:
+                  "linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px)",
+                backgroundSize: "28px 28px",
+              }}
+            />
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-[#0a1628]/95 via-[#0a1628]/55 to-[#0a1628]/90"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute top-0 left-0 right-0 h-[18%] flex items-center justify-center border-b border-white/10 bg-black/40 backdrop-blur-sm"
+              style={{ paddingLeft: marginPx, paddingRight: marginPx }}
+            >
+              <span className="text-[clamp(2.5rem,8vw,4.5rem)] font-black italic tracking-tighter text-white/10 select-none">
+                {badgeText}
+              </span>
+            </div>
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              {/* <span
+                className="inline-flex w-fit mb-3 px-3 py-1 rounded border border-amber-400/60 bg-amber-500/20 text-amber-200 text-[10px] font-black uppercase tracking-[0.35em]"
+                style={badgeStyles}
+              >
+                {badgeText}
+              </span> */}
+              <h2
+                className={cn(
+                  "text-white font-black leading-[0.95] tracking-tight drop-shadow-lg",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-3 text-sky-100/80 text-xs font-medium max-w-[95%]"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-4 flex items-center gap-2">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(36), height: logoPx(36) }}
+                  initialsSize="xs"
+                />
+                <span className="text-[9px] font-bold uppercase tracking-widest text-white/40">
+                  NFL · Week slate
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      case "INJURY_ALERT":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-zinc-950">
+            <div
+              className="absolute inset-0 pointer-events-none opacity-30"
+              style={{
+                backgroundImage:
+                  "repeating-linear-gradient(-45deg, transparent, transparent 12px, rgba(220,38,38,0.15) 12px, rgba(220,38,38,0.15) 13px)",
+              }}
+            />
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-red-950/95 via-black/70 to-transparent"
+              style={{ opacity: overlayMult }}
+            />
+            <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-md bg-red-600 border-2 border-white shadow-lg">
+              <span className="text-white text-lg font-black leading-none">
+                +
+              </span>
+              <span className="text-white text-[10px] font-black uppercase tracking-widest">
+                {badgeText}
+              </span>
+            </div>
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-2 text-red-100/80 text-xs font-semibold"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-4 flex items-center gap-3">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+                <span className="text-[9px] font-mono uppercase text-white/45">
+                  Injury report
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      case "FREE_AGENCY":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#052e16]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-tr from-emerald-950/90 via-black/50 to-emerald-900/80"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-24 -rotate-12 bg-emerald-500/25 blur-3xl pointer-events-none"
+              aria-hidden
+            />
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <span className="mb-4 px-4 py-1 rounded-full border-2 border-emerald-400/70 bg-black/50 text-emerald-300 text-[10px] font-black uppercase tracking-[0.4em]">
+                {badgeText}
+              </span>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight max-w-[96%]",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-4 text-emerald-100/80 text-xs font-medium max-w-md"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-6">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(52), height: logoPx(52) }}
+                  initialsSize="sm"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "DRAFT_PODIUM":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#1a0a00]">
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background:
+                  "radial-gradient(ellipse 80% 50% at 50% 0%, rgba(251,191,36,0.35), transparent 55%)",
+              }}
+            />
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover opacity-95",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-black via-black/55 to-amber-950/40"
+              style={{ opacity: overlayMult }}
+            />
+            <div className="absolute top-6 left-0 right-0 flex justify-center gap-2 z-10">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="w-2 h-8 rounded-full bg-amber-400/90 shadow-[0_0_20px_rgba(251,191,36,0.8)]"
+                  aria-hidden
+                />
+              ))}
+            </div>
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="inline-flex items-center gap-2 mb-3">
+                <span className="text-amber-400/90 text-[10px] font-black uppercase tracking-[0.5em]">
+                  {badgeText}
+                </span>
+                <span className="h-px flex-1 bg-amber-500/40 max-w-[80px]" />
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-[0.95] tracking-tight",
+                  headlineFont,
+                )}
+                style={{
+                  ...headlineStyles,
+                  textShadow: "0 0 40px rgba(251,191,36,0.25)",
+                }}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-3 text-amber-100/75 text-xs"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-4 flex justify-between items-end">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(44), height: logoPx(44) }}
+                  initialsSize="xs"
+                />
+                <span className="text-[9px] font-bold uppercase tracking-widest text-amber-500/80">
+                  NFL Draft
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      case "PLAYOFF_PICTURE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#020617]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-tr from-sky-950/80 via-indigo-950/70 to-black/90"
+              style={{ opacity: overlayMult }}
+            />
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-sky-500 via-white to-sky-500 opacity-90" />
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="mb-3 px-4 py-1.5 rounded-sm border border-sky-400/50 bg-sky-950/60 backdrop-blur-sm">
+                <span className="text-sky-200 text-[10px] font-black uppercase tracking-[0.45em]">
+                  {badgeText}
+                </span>
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight max-w-[96%]",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-4 text-sky-100/70 text-xs max-w-md"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-6 flex items-center gap-2">
+                <div className="h-px w-12 bg-gradient-to-r from-transparent to-sky-400/60" />
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+                <div className="h-px w-12 bg-gradient-to-l from-transparent to-sky-400/60" />
+              </div>
+            </div>
+          </div>
+        );
+      case "FANTASY_WIRE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#1e0533]">
+            <div
+              className="absolute inset-0 opacity-40 pointer-events-none"
+              style={{
+                backgroundImage:
+                  "linear-gradient(rgba(168,85,247,0.15) 1px, transparent 1px)",
+                backgroundSize: "100% 4px",
+              }}
+            />
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-purple-950/85 via-transparent to-black"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="px-2 py-0.5 rounded bg-fuchsia-500 text-black text-[9px] font-black uppercase">
+                  W
+                </span>
+                <span className="text-fuchsia-300/90 text-[10px] font-mono uppercase tracking-widest">
+                  {badgeText}
+                </span>
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-2 text-fuchsia-100/80 text-xs font-mono"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-4 flex items-center gap-2">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(36), height: logoPx(36) }}
+                  initialsSize="xs"
+                />
+                <span className="text-[9px] text-fuchsia-300/50 font-mono uppercase">
+                  Add / wire
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      case "LOCKER_ROOM":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#0c0a09]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-900/75 to-transparent"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute top-0 left-0 bottom-0 w-1.5 bg-gradient-to-b from-amber-700/80 via-amber-600/40 to-amber-800/50"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <p className="text-xs font-serif italic text-amber-200/90 mb-2 tracking-wide">
+                {badgeText}
+              </p>
+              <h2
+                className={cn(
+                  "text-white font-black leading-snug",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-3 text-stone-300/90 text-sm font-serif leading-relaxed"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-5 flex items-center gap-3 border-t border-white/10 pt-3">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(38), height: logoPx(38) }}
+                  initialsSize="xs"
+                />
+                <span className="text-[9px] uppercase tracking-[0.3em] text-white/35">
+                  Locker room
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      case "PRESS_CONFERENCE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#1e3a5f]">
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-[#1e3a5f]/90 via-[#0f172a]/70 to-black/95"
+              style={{ opacity: overlayMult }}
+            />
+            <div className="absolute bottom-[22%] left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1">
+              <div className="w-1 h-10 bg-zinc-700 rounded-t" />
+              <div className="w-16 h-4 rounded bg-zinc-800 border border-zinc-600 shadow-lg flex items-center justify-center">
+                <span className="text-[6px] text-zinc-500 font-mono">NFL</span>
+              </div>
+            </div>
+            <div
+              className="absolute inset-0 flex flex-col justify-end z-10"
+              style={{ padding: `${marginPx}px`, paddingBottom: marginPx + 8 }}
+            >
+              <div className="absolute top-6 left-6 flex items-center gap-2">
+                <div className="w-12 h-1 bg-red-600 rounded" />
+                <span className="text-white/90 text-[10px] font-black uppercase tracking-widest">
+                  {badgeText}
+                </span>
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight text-center",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-3 text-sky-100/80 text-xs text-center max-w-[95%] mx-auto"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-4 flex justify-center">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(40), height: logoPx(40) }}
+                  initialsSize="xs"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case "ENDZONE_SCORE":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
+            <div className="relative flex-1 min-h-0">
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn("w-full h-full object-cover", imagePositionClass)}
+                referrerPolicy="no-referrer"
+                style={imageObjectPositionStyle}
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-b from-transparent via-black/30 to-black/85"
+                style={{ opacity: overlayMult }}
+              />
+            </div>
+            <div
+              className="relative shrink-0 z-10 border-t-4 border-white"
+              style={{
+                background:
+                  "linear-gradient(180deg, #14532d 0%, #166534 35%, #0f5132 100%)",
+                boxShadow: "inset 0 8px 24px rgba(0,0,0,0.35)",
+                padding: `${Math.max(12, marginPx * 0.75)}px`,
+              }}
+            >
+              <div
+                className="absolute inset-x-0 top-0 h-2 opacity-40 pointer-events-none"
+                style={{
+                  backgroundImage:
+                    "repeating-linear-gradient(90deg, transparent, transparent 10px, rgba(255,255,255,0.12) 10px, rgba(255,255,255,0.12) 11px)",
+                }}
+              />
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-white font-black text-2xl leading-none tracking-tighter drop-shadow-md">
+                  {badgeText}
+                </span>
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(36), height: logoPx(36) }}
+                  initialsSize="xs"
+                />
+              </div>
+              <h2
+                className={cn(
+                  "mt-2 text-white font-black leading-tight tracking-tight",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-2 text-emerald-100/90 text-xs font-semibold line-clamp-3"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <p className="mt-3 text-[8px] font-mono uppercase tracking-[0.35em] text-white/40">
+                End zone · NFL
+              </p>
+            </div>
+          </div>
+        );
+      case "ROOKIE_SPOTLIGHT":
+        return (
+          <div className="relative w-full h-full overflow-hidden bg-[#1c1917]">
+            <div
+              className="absolute -top-1/4 -right-1/4 w-[80%] h-[80%] rounded-full pointer-events-none"
+              style={{
+                background: `radial-gradient(circle, ${team.primary}55 0%, transparent 65%)`,
+              }}
+            />
+            <img
+              src={imageUrl}
+              alt=""
+              className={cn(
+                "absolute inset-0 w-full h-full object-cover",
+                imagePositionClass,
+              )}
+              referrerPolicy="no-referrer"
+              style={imageObjectPositionStyle}
+            />
+            <div
+              className="absolute inset-0 bg-gradient-to-t from-black via-black/55 to-amber-950/30"
+              style={{ opacity: overlayMult }}
+            />
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-center z-10"
+              style={{ padding: `${marginPx}px` }}
+            >
+              <div className="mb-4 relative">
+                <span
+                  className="absolute -inset-1 rounded-full bg-amber-400/30 blur-md"
+                  aria-hidden
+                />
+                <span className="relative inline-block px-4 py-1.5 rounded-full border-2 border-amber-400 bg-black/60 text-amber-300 text-[10px] font-black uppercase tracking-[0.4em]">
+                  {badgeText}
+                </span>
+              </div>
+              <h2
+                className={cn(
+                  "text-white font-black leading-tight max-w-[96%]",
+                  headlineFont,
+                )}
+                style={headlineStyles}
+              >
+                {headline}
+              </h2>
+              {subtext ? (
+                <p
+                  className="mt-4 text-amber-100/75 text-xs max-w-md"
+                  style={subtextStyles}
+                >
+                  {subtext}
+                </p>
+              ) : null}
+              <div className="mt-6">
+                <TeamBranding
+                  team={team}
+                  style={{ width: logoPx(48), height: logoPx(48) }}
+                  initialsSize="sm"
+                />
+              </div>
+            </div>
+          </div>
+        );
     }
   };
 
@@ -6109,7 +7904,6 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       : []),
     "BREAKING",
     "TRADED",
-    "TRADED_CARD",
     "RELEASED",
     "RUMORS",
     "QUOTE",
@@ -6138,6 +7932,26 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     "RIBBON_HEADLINE",
     "STACKED_NEWS",
     "GRID_HERO",
+    "STADIUM_NIGHT",
+    "TABLOID_EXTRA",
+    "GLASS_HUD",
+    "TURF_STRIP",
+    "CINEMA_LETTERBOX",
+    "MAGAZINE_COVER",
+    "PLAYOFF_BRACKET",
+    "CHROME_FLARE",
+    "RED_ZONE_BAR",
+    "HALFTONE_POP",
+    "NFL_SUNDAY_SLATE",
+    "INJURY_ALERT",
+    "FREE_AGENCY",
+    "DRAFT_PODIUM",
+    "PLAYOFF_PICTURE",
+    "FANTASY_WIRE",
+    "LOCKER_ROOM",
+    "PRESS_CONFERENCE",
+    "ENDZONE_SCORE",
+    "ROOKIE_SPOTLIGHT",
   ] as PostStyle[];
 
   const SectionHeader = ({
@@ -6272,7 +8086,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 className={cn(
                   "shadow-2xl overflow-hidden bg-zinc-900 transition-all duration-500",
                   formats[activeFormat],
-                  publishAsCarousel && fetchedContentImageUrls.length >= 2
+                  publishAsCarousel && fetchedCarouselMedia.length >= 2
                     ? "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 -z-10 pointer-events-none"
                     : "",
                 )}
@@ -6282,15 +8096,12 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
               {/* Carousel preview */}
               {publishAsCarousel &&
-                fetchedContentImageUrls.length >= 2 &&
+                fetchedCarouselMedia.length >= 2 &&
                 (() => {
-                  const extraImagesCount = Math.max(
-                    fetchedContentImageUrls.length - 1,
-                    0,
-                  );
-                  const totalSlides = 1 + extraImagesCount;
+                  const totalSlides = fetchedCarouselMedia.length;
                   const isTemplateSlide = carouselPreviewIndex === 0;
-                  const currentImageIndex = carouselPreviewIndex;
+                  const currentMedia =
+                    fetchedCarouselMedia[carouselPreviewIndex];
                   return (
                     <>
                       <div
@@ -6306,9 +8117,21 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                           <div className="w-full h-full">
                             {renderTemplate()}
                           </div>
+                        ) : currentMedia?.kind === "video" ? (
+                          <video
+                            src={currentMedia.url}
+                            className={cn(
+                              "w-full h-full object-cover transition-opacity duration-200",
+                              imagePositionClass,
+                            )}
+                            style={imageObjectPositionStyle}
+                            controls
+                            playsInline
+                            preload="metadata"
+                          />
                         ) : (
                           <img
-                            src={fetchedContentImageUrls[currentImageIndex]}
+                            src={currentMedia?.url}
                             alt=""
                             className={cn(
                               "w-full h-full object-cover transition-opacity duration-200",
@@ -6372,7 +8195,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                           <button
                             type="button"
                             onClick={() =>
-                              removeCarouselImage(currentImageIndex)
+                              removeCarouselMediaItem(carouselPreviewIndex)
                             }
                             className="flex items-center gap-1 px-2 py-1 rounded bg-red-500/20 border border-red-400/30 text-red-300 text-xs hover:bg-red-500/30 transition-colors"
                           >
@@ -6387,7 +8210,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
             {/* Export bar */}
             <div className="flex items-center justify-center gap-3 px-5 py-3 border-t border-white/8 shrink-0 bg-zinc-950/60">
-              {publishAsCarousel && fetchedContentImageUrls.length >= 2 && (
+              {publishAsCarousel && fetchedCarouselMedia.length >= 2 && (
                 <span className="text-white/30 text-xs">
                   Desmarque carrossel para exportar.
                 </span>
@@ -6396,7 +8219,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 onClick={() => exportPost("png")}
                 disabled={
                   isExporting ||
-                  (publishAsCarousel && fetchedContentImageUrls.length >= 2)
+                  (publishAsCarousel && fetchedCarouselMedia.length >= 2)
                 }
                 className="flex items-center gap-2 bg-white text-black px-5 py-2.5 rounded-xl font-bold hover:scale-105 transition-transform disabled:opacity-50 text-sm"
               >
@@ -6406,7 +8229,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 onClick={() => exportPost("jpg")}
                 disabled={
                   isExporting ||
-                  (publishAsCarousel && fetchedContentImageUrls.length >= 2)
+                  (publishAsCarousel && fetchedCarouselMedia.length >= 2)
                 }
                 className="flex items-center gap-2 bg-zinc-800 border border-white/10 text-white px-5 py-2.5 rounded-xl font-bold hover:scale-105 transition-transform disabled:opacity-50 text-sm"
               >
@@ -6467,22 +8290,76 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                       }
                     />
                     <div className="px-3 pb-3">
-                      <div className="grid grid-cols-3 gap-1">
-                        {ALL_STYLES.map((s) => (
-                          <button
-                            key={s}
-                            onClick={() => setActiveStyle(s)}
-                            className={cn(
-                              "py-2 px-1 rounded-lg text-[8px] font-black uppercase transition-all border leading-tight text-center",
-                              activeStyle === s
-                                ? "bg-white text-black border-white"
-                                : "bg-white/4 text-white/55 border-white/8 hover:border-white/25 hover:bg-white/10 hover:text-white",
-                            )}
-                          >
-                            {s.replaceAll("_", " ")}
-                          </button>
-                        ))}
+                      <div className="flex items-stretch gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const i = ALL_STYLES.indexOf(activeStyle);
+                            const cur = i >= 0 ? i : 0;
+                            const prev =
+                              cur <= 0 ? ALL_STYLES.length - 1 : cur - 1;
+                            setActiveStyle(ALL_STYLES[prev]);
+                          }}
+                          className="shrink-0 flex items-center justify-center w-10 rounded-xl border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+                          aria-label="Template anterior"
+                        >
+                          <ChevronLeft size={18} />
+                        </button>
+                        <div className="flex-1 min-w-0 flex flex-col items-center justify-center rounded-xl border border-white/15 bg-white/5 px-2 py-3">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-white/40 leading-none mb-1">
+                            Template atual
+                          </span>
+                          <span className="text-[11px] font-black uppercase text-center text-white leading-tight line-clamp-3">
+                            {activeStyle.replaceAll("_", " ")}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const i = ALL_STYLES.indexOf(activeStyle);
+                            const cur = i >= 0 ? i : 0;
+                            const next = (cur + 1) % ALL_STYLES.length;
+                            setActiveStyle(ALL_STYLES[next]);
+                          }}
+                          className="shrink-0 flex items-center justify-center w-10 rounded-xl border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+                          aria-label="Próximo template"
+                        >
+                          <ChevronRight size={18} />
+                        </button>
                       </div>
+                      <p className="text-white/25 text-[9px] text-center mt-2 tabular-nums">
+                        {Math.max(0, ALL_STYLES.indexOf(activeStyle)) + 1} /{" "}
+                        {ALL_STYLES.length}
+                      </p>
+                    </div>
+                  </details>
+
+                  <details open className="group">
+                    <SectionHeader label="Overlay da foto" />
+                    <div className="px-4 pb-4 space-y-2 mt-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-white/35 text-[10px] w-16 shrink-0 uppercase tracking-widest">
+                          Vinheta
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={imageOverlayOpacity}
+                          onChange={(e) =>
+                            setImageOverlayOpacity(parseInt(e.target.value, 10))
+                          }
+                          className="flex-1 accent-white/60 h-1"
+                        />
+                        <span className="text-white/40 text-[10px] w-9 text-right shrink-0 tabular-nums">
+                          {imageOverlayOpacity}%
+                        </span>
+                      </div>
+                      <p className="text-white/30 text-[9px] leading-relaxed">
+                        Controla o escurecimento sobre a imagem da notícia
+                        (gradientes e vinhetas). Em 0 a foto fica mais limpa; em
+                        100 mantém o contraste original do template.
+                      </p>
                     </div>
                   </details>
 
@@ -7010,7 +8887,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                             {epicVariationUrls.length > 0 && (
                               <p className="text-white/35 text-[10px]">
                                 Variações prontas: {epicVariationUrls.length}{" "}
-                                {fetchedContentImageUrls.length >= 2
+                                {fetchedCarouselMedia.length >= 2
                                   ? "· carrossel ativo"
                                   : ""}
                               </p>
@@ -7123,7 +9000,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
                       {/* Carousel thumbnails */}
                       {publishDestination === "feed" &&
-                        fetchedContentImageUrls.length >= 2 && (
+                        fetchedCarouselMedia.length >= 2 && (
                           <div className="space-y-2">
                             <label className="flex items-center gap-2 cursor-pointer">
                               <input
@@ -7135,27 +9012,42 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                                 className="rounded border-white/30 bg-black/40 text-pink-500"
                               />
                               <span className="text-white/65 text-xs">
-                                Carrossel ({fetchedContentImageUrls.length}{" "}
-                                imagens)
+                                Carrossel ({fetchedCarouselMedia.length} itens
+                                {fetchedCarouselMedia.some(
+                                  (m) => m.kind === "video",
+                                )
+                                  ? " · inclui vídeo(s)"
+                                  : ""}
+                                )
                               </span>
                             </label>
                             <div className="flex gap-1.5 overflow-x-auto pb-1">
-                              {fetchedContentImageUrls.map((url, i) => (
+                              {fetchedCarouselMedia.map((item, i) => (
                                 <div
-                                  key={`${url}-${i}`}
+                                  key={`${item.kind}-${item.url}-${i}`}
                                   className="relative shrink-0 w-12 h-12 rounded-lg overflow-hidden border border-white/20 bg-black/40 group"
                                 >
-                                  <img
-                                    src={url}
-                                    alt=""
-                                    className="w-full h-full object-cover"
-                                    referrerPolicy="no-referrer"
-                                  />
+                                  {item.kind === "video" ? (
+                                    <video
+                                      src={item.url}
+                                      className="w-full h-full object-cover"
+                                      muted
+                                      playsInline
+                                      preload="metadata"
+                                    />
+                                  ) : (
+                                    <img
+                                      src={item.url}
+                                      alt=""
+                                      className="w-full h-full object-cover"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  )}
                                   <button
                                     type="button"
                                     onClick={(e) => {
                                       e.preventDefault();
-                                      removeCarouselImage(i);
+                                      removeCarouselMediaItem(i);
                                     }}
                                     className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-red-500/90 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                                   >
@@ -7226,7 +9118,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                     )}
                     {isPublishing ? "Publicando..." : "Publicar no Instagram"}
                   </button>
-                  {publishAsCarousel && fetchedContentImageUrls.length >= 2 && (
+                  {publishAsCarousel && fetchedCarouselMedia.length >= 2 && (
                     <button
                       type="button"
                       onClick={debugCaptureCarouselTemplate}

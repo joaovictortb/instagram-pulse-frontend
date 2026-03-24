@@ -48,6 +48,226 @@ export interface FetchedEspnContent {
   contentMarkdown: string;
   /** URLs de imagens da notícia (campo images da API + opcionalmente do HTML do story). Útil para carrossel no Instagram. */
   imageUrls: string[];
+  /** URLs de vídeo (MP4/WebM/MOV) detectadas na API e no HTML do story — para carrossel misto no Instagram. */
+  videoUrls: string[];
+}
+
+/** URLs diretas de arquivo de vídeo aceitáveis para upload / Instagram. */
+const VIDEO_FILE_RE =
+  /\.(mp4|webm|mov)(\?|$)/i;
+
+function looksLikeDirectVideoUrl(url: string): boolean {
+  const u = url.trim();
+  if (!u.startsWith("http")) return false;
+  if (/\.m3u8(\?|$)/i.test(u)) return false;
+  // Inclui paths tipo Cloudinary: .../video/upload/.../arquivo.mp4
+  return (
+    VIDEO_FILE_RE.test(u) ||
+    /\/video\//i.test(u) ||
+    /\/video\/upload\//i.test(u)
+  );
+}
+
+/**
+ * Encontra URLs de ficheiro de vídeo em qualquer posição do texto (href, JSON, markdown residual, etc.).
+ * Necessário porque o HTML da API nem sempre replica o <video> do blog/Supabase.
+ */
+function extractDirectVideoUrlsFromRawText(text: string | undefined): string[] {
+  if (!text?.trim()) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const urlRe =
+    /https?:\/\/[^\s"'<>`\]]+?\.(mp4|webm|mov)(?:\?[^\s"'<>`\]]*)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = urlRe.exec(text)) !== null) {
+    let u = m[0].replace(/[),.;]+$/u, "").trim();
+    if (!u || seen.has(u)) continue;
+    if (!looksLikeDirectVideoUrl(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function normalizeVideoUrl(url: string): string {
+  return url.trim();
+}
+
+/** Aceita só ficheiro de vídeo direto (evita páginas tipo /video/clip). */
+function isDirectVideoFileUrl(url: string): boolean {
+  const u = url.trim();
+  if (!u.startsWith("http")) return false;
+  if (/\.m3u8(\?|$)/i.test(u)) return false;
+  return /\.(mp4|webm|mov)(\?|$)/i.test(u) || /\/video\/upload\//i.test(u);
+}
+
+/**
+ * Percorre objetos/array da API ESPN (ex.: headline.video[]) e recolhe hrefs .mp4/.webm/.mov.
+ */
+function collectDirectVideoUrlsFromJsonTree(
+  value: unknown,
+  out: string[],
+  seen: Set<string>,
+  max = 10,
+): void {
+  if (out.length >= max) return;
+  if (value == null) return;
+  if (typeof value === "string") {
+    const u = value.trim();
+    if (!u || seen.has(u)) return;
+    if (!isDirectVideoFileUrl(u)) return;
+    seen.add(u);
+    out.push(u);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDirectVideoUrlsFromJsonTree(item, out, seen, max);
+      if (out.length >= max) return;
+    }
+    return;
+  }
+  if (typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      collectDirectVideoUrlsFromJsonTree(v, out, seen, max);
+      if (out.length >= max) return;
+    }
+  }
+}
+
+function firstDirectVideoUrlInTree(value: unknown): string | null {
+  const acc: string[] = [];
+  const s = new Set<string>();
+  collectDirectVideoUrlsFromJsonTree(value, acc, s, 1);
+  return acc[0] ?? null;
+}
+
+/**
+ * Um clip na API ESPN tem vários .mp4 (360p, 720p, mezzanine…). Escolhe uma URL estável.
+ */
+function preferredMp4FromEspnVideoBlock(v: unknown): string | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const links = o.links as Record<string, unknown> | undefined;
+  if (!links) return null;
+  const source = links.source as Record<string, unknown> | undefined;
+  const mezz = source?.mezzanine as { href?: string } | undefined;
+  if (typeof mezz?.href === "string" && isDirectVideoFileUrl(mezz.href)) {
+    return mezz.href.trim();
+  }
+  const hd = links.HD as { href?: string } | undefined;
+  if (typeof hd?.href === "string" && isDirectVideoFileUrl(hd.href)) {
+    return hd.href.trim();
+  }
+  if (typeof source?.href === "string" && isDirectVideoFileUrl(source.href)) {
+    return source.href.trim();
+  }
+  const mobile = links.mobile as Record<string, unknown> | undefined;
+  const mobSrc = mobile?.source as { href?: string } | undefined;
+  if (typeof mobSrc?.href === "string" && isDirectVideoFileUrl(mobSrc.href)) {
+    return mobSrc.href.trim();
+  }
+  return null;
+}
+
+function pushOneVideoFromEspnBlock(
+  v: unknown,
+  out: string[],
+  seen: Set<string>,
+): void {
+  const pref =
+    preferredMp4FromEspnVideoBlock(v) ?? firstDirectVideoUrlInTree(v);
+  if (pref && !seen.has(pref)) {
+    seen.add(pref);
+    out.push(pref);
+  }
+}
+
+/**
+ * Extrai URLs de vídeo do HTML da matéria (video/source/embed) e de objetos JSON genéricos.
+ */
+export function extractVideoUrlsFromEspnStory(
+  storyHtml: string | undefined,
+  record: Record<string, unknown>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  const push = (raw: string | undefined) => {
+    const u = normalizeVideoUrl(raw ?? "");
+    if (!u || seen.has(u)) return;
+    if (!looksLikeDirectVideoUrl(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+
+  // API ESPN: campo "video" (array) — não "videos". Story usa placeholders <video1>, não <video src>.
+  const videoArray = record?.video;
+  if (Array.isArray(videoArray)) {
+    for (const v of videoArray) {
+      if (typeof v === "string") {
+        push(v);
+      } else {
+        pushOneVideoFromEspnBlock(v, out, seen);
+      }
+      if (out.length >= 10) return out.slice(0, 10);
+    }
+  } else if (videoArray && typeof videoArray === "object") {
+    pushOneVideoFromEspnBlock(videoArray, out, seen);
+    if (out.length >= 10) return out.slice(0, 10);
+  }
+
+  // API: array "videos" (plural) em alguns endpoints
+  const videosField = record?.videos;
+  if (Array.isArray(videosField)) {
+    for (const v of videosField) {
+      if (typeof v === "string") {
+        push(v);
+        continue;
+      }
+      if (v && typeof v === "object") {
+        pushOneVideoFromEspnBlock(v, out, seen);
+        if (out.length >= 10) return out.slice(0, 10);
+      }
+    }
+  }
+
+  const linksField = record?.links;
+  if (Array.isArray(linksField)) {
+    for (const l of linksField) {
+      if (l && typeof l === "object") {
+        const o = l as Record<string, unknown>;
+        const href = typeof o.href === "string" ? o.href : "";
+        if (href && looksLikeDirectVideoUrl(href)) push(href);
+      }
+    }
+  }
+
+  if (storyHtml) {
+    const patterns: RegExp[] = [
+      /<video[^>]*?\ssrc=["']([^"']+)["']/gi,
+      /<source[^>]*?\ssrc=["']([^"']+)["']/gi,
+      /<iframe[^>]*?\ssrc=["']([^"']+)["']/gi,
+      // href em <a> para .mp4 (fallback de players / “Assistir em nova aba”)
+      /<a[^>]*?\shref=["']([^"']+\.(?:mp4|webm|mov)(?:\?[^"']*)?)["']/gi,
+    ];
+    for (const re of patterns) {
+      let m: RegExpExecArray | null;
+      re.lastIndex = 0;
+      while ((m = re.exec(storyHtml)) !== null) {
+        push(m[1]);
+        if (out.length >= 10) return out.slice(0, 10);
+      }
+    }
+
+    for (const u of extractDirectVideoUrlsFromRawText(storyHtml)) {
+      push(u);
+      if (out.length >= 10) return out.slice(0, 10);
+    }
+  }
+
+  return out.slice(0, 10);
 }
 
 /**
@@ -104,10 +324,46 @@ export async function fetchEspnArticleContent(
   }
   const imageUrlsFinal = imageUrls.slice(0, 10);
 
+  let videoUrls = extractVideoUrlsFromEspnStory(storyHtml, record).filter(
+    (u) => !seen.has(u),
+  );
+
+  // Fallback: descrição / headline às vezes trazem link mp4 que não está em `story`
+  const extraFromMeta = extractDirectVideoUrlsFromRawText(
+    `${description ?? ""}\n${headline ?? ""}`,
+  );
+  const seenVideo = new Set(videoUrls);
+  for (const u of extraFromMeta) {
+    if (seenVideo.has(u) || seen.has(u)) continue;
+    if (videoUrls.length >= 10) break;
+    seenVideo.add(u);
+    videoUrls.push(u);
+  }
+
+  if (import.meta.env.DEV) {
+    const videoField = record?.video;
+    console.log("[espn-content] fetchEspnArticleContent debug", {
+      contentId,
+      apiUrl: url,
+      storyHtmlLength: storyHtml?.length ?? 0,
+      storyHtmlPreview: storyHtml?.slice(0, 400) ?? "(vazio)",
+      storyHasVideoPlaceholder: /<video\d+>/i.test(storyHtml ?? ""),
+      recordTopKeys: Object.keys(record ?? {}).slice(0, 40),
+      hasVideoArray: Array.isArray(videoField),
+      videoArrayLength: Array.isArray(videoField) ? videoField.length : 0,
+      hasVideosPlural: Array.isArray(record?.videos),
+      imagesFromApi: apiImages?.length ?? 0,
+      imageUrlsFinalCount: imageUrlsFinal.length,
+      videoUrlsCount: videoUrls.length,
+      videoUrlsPreview: videoUrls.map((u) => u.slice(0, 120)),
+    });
+  }
+
   return {
     headline: headline ?? "",
     description: description ?? "",
     contentMarkdown: contentMarkdown || (description ?? ""),
     imageUrls: imageUrlsFinal,
+    videoUrls,
   };
 }

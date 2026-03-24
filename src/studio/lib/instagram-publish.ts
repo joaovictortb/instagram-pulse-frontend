@@ -65,6 +65,275 @@ function isTokenExpiredError(data: unknown): boolean {
   return e?.code === 190;
 }
 
+/**
+ * Erro temporário da Meta ("Please retry your request later", code 2, is_transient).
+ * Comum ao criar carrossel / container com vários filhos.
+ */
+function isTransientGraphApiError(data: unknown): boolean {
+  const err = (data as { error?: { code?: number; is_transient?: boolean } })
+    ?.error;
+  if (!err) return false;
+  if (err.is_transient === true) return true;
+  if (err.code === 2) return true;
+  return false;
+}
+
+/** Para logs: nunca imprimir access_token completo. */
+function redactTokenInUrl(url: string): string {
+  try {
+    return url.replace(/access_token=[^&]+/gi, "access_token=***REDACTED***");
+  } catch {
+    return "(url)";
+  }
+}
+
+/** Máx. 2200 caracteres na legenda do feed Instagram. */
+function clampInstagramCaptionText(input: string, maxLen = 2200): string {
+  const s = (input ?? "").trim();
+  if (!s) return "";
+  const normalized = s.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ");
+  if (normalized.length <= maxLen) return normalized;
+  const clipped = normalized.slice(0, Math.max(0, maxLen - 1)).trimEnd();
+  return clipped ? `${clipped}…` : "";
+}
+
+/**
+ * Log completo de falha na Graph API (mensagem, code, subcode, fbtrace_id, JSON bruto).
+ */
+function logMetaGraphApiFailure(
+  context: string,
+  httpStatus: number,
+  data: unknown,
+  requestUrl?: string,
+): void {
+  const raw = data as {
+    error?: {
+      message?: string;
+      type?: string;
+      code?: number;
+      error_subcode?: number;
+      is_transient?: boolean;
+      error_user_title?: string;
+      error_user_msg?: string;
+      fbtrace_id?: string;
+    };
+  };
+  console.error(
+    `[instagram-publish] ${context} — ERRO Graph API (http ${httpStatus})`,
+    {
+      requestUrl: requestUrl ? redactTokenInUrl(requestUrl) : undefined,
+      httpStatus,
+      error: raw?.error ?? data,
+      errorMessage: raw?.error?.message,
+      errorCode: raw?.error?.code,
+      errorSubcode: raw?.error?.error_subcode,
+      isTransient: raw?.error?.is_transient,
+      fbtrace_id: raw?.error?.fbtrace_id,
+      /** Corpo completo para colar no suporte Meta / debug */
+      responseJson: JSON.stringify(data),
+    },
+  );
+}
+
+/**
+ * POST ao Graph API com várias tentativas quando a Meta devolve erro transitório.
+ */
+async function graphPostJsonWithRetry(
+  url: string,
+  label: string,
+  maxAttempts = 4,
+): Promise<{ ok: boolean; data: unknown }> {
+  const betweenDelaysMs = [2500, 6000, 12000];
+  let lastData: unknown = {};
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const wait = betweenDelaysMs[attempt - 1] ?? 10000;
+      console.log(
+        `[instagram-publish] ${label}: nova tentativa ${attempt + 1}/${maxAttempts} após ${wait}ms (erro transitório Meta)...`,
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    const res = await fetch(url, { method: "POST" });
+    const data = await res.json();
+    lastData = data;
+    if (!res.ok) {
+      logMetaGraphApiFailure(
+        `${label} (tentativa ${attempt + 1}/${maxAttempts})`,
+        res.status,
+        data,
+        url,
+      );
+    }
+    if (res.ok) return { ok: true, data };
+    if (isTokenExpiredError(data)) return { ok: false, data };
+    if (!isTransientGraphApiError(data)) return { ok: false, data };
+    console.warn(`[instagram-publish] ${label}: erro transitório (vai repetir)`, {
+      attempt: attempt + 1,
+      message: (data as { error?: { message?: string } })?.error?.message,
+      code: (data as { error?: { code?: number; fbtrace_id?: string } })?.error
+        ?.code,
+      fbtrace_id: (data as { error?: { fbtrace_id?: string } })?.error
+        ?.fbtrace_id,
+    });
+  }
+  console.error(
+    `[instagram-publish] ${label}: esgotadas ${maxAttempts} tentativas (erro transitório)`,
+    {
+      lastResponseJson: JSON.stringify(lastData),
+      lastParsed: lastData,
+    },
+  );
+  return { ok: false, data: lastData };
+}
+
+/**
+ * POST com `application/x-www-form-urlencoded` no corpo (não na query string).
+ * Necessário para legendas longas (~2200 chars + emojis): URLs GET podem estourar
+ * limite de tamanho e a Meta responde 500 / OAuthException code 2.
+ */
+async function graphPostFormUrlEncodedWithRetry(
+  endpoint: string,
+  fields: Record<string, string>,
+  label: string,
+  maxAttempts = 4,
+): Promise<{ ok: boolean; data: unknown }> {
+  const betweenDelaysMs = [2500, 6000, 12000];
+  let lastData: unknown = {};
+  const safeLogHint = `${endpoint} [POST body: ${Object.keys(fields).join(", ")}; access_token redacted]`;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const wait = betweenDelaysMs[attempt - 1] ?? 10000;
+      console.log(
+        `[instagram-publish] ${label}: nova tentativa ${attempt + 1}/${maxAttempts} após ${wait}ms (erro transitório Meta)...`,
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields).toString(),
+    });
+    const data = await res.json();
+    lastData = data;
+    if (!res.ok) {
+      logMetaGraphApiFailure(
+        `${label} (tentativa ${attempt + 1}/${maxAttempts})`,
+        res.status,
+        data,
+        safeLogHint,
+      );
+    }
+    if (res.ok) return { ok: true, data };
+    if (isTokenExpiredError(data)) return { ok: false, data };
+    if (!isTransientGraphApiError(data)) return { ok: false, data };
+    console.warn(
+      `[instagram-publish] ${label}: erro transitório (vai repetir)`,
+      {
+        attempt: attempt + 1,
+        message: (data as { error?: { message?: string } })?.error?.message,
+        code: (data as { error?: { code?: number; fbtrace_id?: string } })?.error
+          ?.code,
+        fbtrace_id: (data as { error?: { fbtrace_id?: string } })?.error
+          ?.fbtrace_id,
+      },
+    );
+  }
+  console.error(
+    `[instagram-publish] ${label}: esgotadas ${maxAttempts} tentativas (erro transitório)`,
+    {
+      lastResponseJson: JSON.stringify(lastData),
+      lastParsed: lastData,
+    },
+  );
+  return { ok: false, data: lastData };
+}
+
+/**
+ * Aguarda cada item do carrossel ficar processado na Meta antes de montar o container pai.
+ * Sem isto, POST com media_type=CAROUSEL + children pode devolver 500 / OAuthException code 2
+ * (especialmente com vídeo).
+ * @see https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-container
+ */
+async function waitForIgContainerFinished(params: {
+  containerId: string;
+  accessToken: string;
+  label: string;
+  isVideo: boolean;
+}): Promise<void> {
+  const { containerId, accessToken, label, isVideo } = params;
+  const maxTotalMs = isVideo ? 10 * 60 * 1000 : 5 * 60 * 1000;
+  const startedAt = Date.now();
+  const baseDelaysMs = isVideo
+    ? [
+        1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000, 15000, 20000,
+        25000, 30000,
+      ]
+    : [800, 1200, 1600, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000];
+  let pollIndex = 0;
+
+  while (Date.now() - startedAt < maxTotalMs) {
+    const url = `${GRAPH_API_BASE}/${containerId}?fields=status_code,status&access_token=${encodeURIComponent(accessToken)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!res.ok) {
+      logMetaGraphApiFailure(
+        `${label}: GET status do container`,
+        res.status,
+        data,
+        url,
+      );
+      if (isTokenExpiredError(data)) {
+        throw new Error(
+          "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
+        );
+      }
+      if (!isTransientGraphApiError(data)) {
+        const msg =
+          (data as { error?: { message?: string } })?.error?.message ||
+          "Erro ao consultar estado do item do carrossel";
+        throw new Error(msg);
+      }
+    } else {
+      const statusCode = (data as { status_code?: string }).status_code;
+      const status = (data as { status?: string }).status;
+      if (statusCode === "FINISHED") {
+        console.log(`[instagram-publish] ${label}: container pronto (FINISHED)`, {
+          containerIdPrefix: `${containerId.slice(0, 6)}…`,
+        });
+        return;
+      }
+      if (statusCode === "ERROR" || statusCode === "EXPIRED") {
+        console.error(`[instagram-publish] ${label}: container com falha`, {
+          statusCode,
+          status,
+          responseJson: JSON.stringify(data),
+        });
+        throw new Error(
+          statusCode === "EXPIRED"
+            ? "Um item do carrossel expirou antes de ficar pronto. Tente novamente."
+            : `Um item do carrossel falhou no processamento (${status ?? "ERROR"}). Verifique URLs públicas de imagem/vídeo.`,
+        );
+      }
+      if (pollIndex === 0 || pollIndex % 5 === 0) {
+        console.log(`[instagram-publish] ${label}: aguardando Meta processar item...`, {
+          status_code: statusCode,
+          status,
+        });
+      }
+    }
+
+    const wait =
+      baseDelaysMs[Math.min(pollIndex, baseDelaysMs.length - 1)] ?? 15000;
+    pollIndex++;
+    await new Promise((r) => setTimeout(r, wait));
+  }
+
+  throw new Error(
+    `${label}: tempo limite excedido aguardando o item ficar pronto na Meta (vídeo/imagem).`,
+  );
+}
+
 async function publishWithRetry(params: {
   accountId: string;
   accessToken: string;
@@ -104,12 +373,10 @@ async function publishWithRetry(params: {
       );
     }
 
-    const publishRes = await fetch(
-      `${GRAPH_API_BASE}/${accountId}/media_publish?creation_id=${creationId}&access_token=${encodeURIComponent(
-        accessToken,
-      )}`,
-      { method: "POST" },
-    );
+    const publishReqUrl = `${GRAPH_API_BASE}/${accountId}/media_publish?creation_id=${creationId}&access_token=${encodeURIComponent(
+      accessToken,
+    )}`;
+    const publishRes = await fetch(publishReqUrl, { method: "POST" });
     const publishData = await publishRes.json();
 
     console.log(`[instagram-publish] ${label}: media_publish response`, {
@@ -120,6 +387,14 @@ async function publishWithRetry(params: {
       error: (publishData as { error?: { code?: number; message?: string } })
         ?.error,
     });
+    if (!publishRes.ok) {
+      logMetaGraphApiFailure(
+        `${label}: media_publish`,
+        publishRes.status,
+        publishData,
+        publishReqUrl,
+      );
+    }
 
     if (!publishRes.ok && isTokenExpiredError(publishData)) {
       throw new Error(
@@ -148,6 +423,14 @@ async function publishWithRetry(params: {
       continue;
     }
 
+    console.error(
+      `[instagram-publish] ${label}: media_publish falhou (sem mais retry adequado)`,
+      {
+        attempt: attempt + 1,
+        responseJson: JSON.stringify(publishData),
+        parsed: publishData,
+      },
+    );
     const msg =
       (publishData as { error?: { message?: string } })?.error?.message ||
       "Erro ao publicar";
@@ -186,12 +469,20 @@ export async function publishImageToInstagram(params: {
       "A URL da imagem não é válida para o Instagram. Use uma URL pública (HTTPS).",
     );
   }
-  const createUrl = `${GRAPH_API_BASE}/${accountId}/media?image_url=${encodeURIComponent(imageUrl)}&caption=${encodeURIComponent(caption)}&access_token=${encodeURIComponent(accessToken)}`;
-  const createRes = await fetch(createUrl, { method: "POST" });
-  const createData = await createRes.json();
+  const captionSafe = clampInstagramCaptionText(caption);
+  const mediaEndpoint = `${GRAPH_API_BASE}/${accountId}/media`;
+  const { ok: createOk, data: createData } =
+    await graphPostFormUrlEncodedWithRetry(
+      mediaEndpoint,
+      {
+        image_url: imageUrl,
+        caption: captionSafe,
+        access_token: accessToken,
+      },
+      "Feed: criar media",
+    );
   console.log("[instagram-publish] Feed: media create response", {
-    ok: createRes.ok,
-    status: createRes.status,
+    ok: createOk,
     hasId: !!(createData as { id?: string }).id,
     error: (
       createData as {
@@ -199,19 +490,25 @@ export async function publishImageToInstagram(params: {
       }
     )?.error,
   });
-  if (!createRes.ok && isTokenExpiredError(createData)) {
+  if (!createOk && isTokenExpiredError(createData)) {
     console.error("[instagram-publish] Feed: token expirado", { createData });
     throw new Error(
       "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
     );
   }
-  if (!createRes.ok && isMediaUriError(createData)) {
+  if (!createOk && isMediaUriError(createData)) {
     const msg =
       (createData as { error?: { message?: string } })?.error?.message ||
       "Erro Meta API";
     console.error("[instagram-publish] Feed: create falhou (media URI)", {
       createData,
     });
+    throw new Error(msg);
+  }
+  if (!createOk) {
+    const msg =
+      (createData as { error?: { message?: string } })?.error?.message ||
+      "Erro ao criar mídia no Feed.";
     throw new Error(msg);
   }
   const creationId = (createData as { id?: string }).id;
@@ -380,41 +677,85 @@ export async function publishReelToInstagram(params: {
 const CAROUSEL_MIN_ITEMS = 2;
 const CAROUSEL_MAX_ITEMS = 10;
 
-/** Feed: carrossel com múltiplas imagens (2 a 10). Legenda só no post principal. */
+/** Item do carrossel: imagem ou vídeo (URLs públicas HTTPS). */
+export type InstagramCarouselItem =
+  | { kind: "image"; url: string }
+  | { kind: "video"; url: string };
+
+function isCarouselItemValid(item: InstagramCarouselItem): boolean {
+  if (item.kind === "video") return isVideoUrlValidForInstagram(item.url);
+  return isImageUrlValidForInstagram(item.url);
+}
+
+/** Feed: carrossel com múltiplas mídias (2 a 10) — imagens e/ou vídeos. Legenda só no post principal. */
 export async function publishCarouselToInstagram(params: {
-  imageUrls: string[];
+  /** Preferencial: lista ordenada de imagens e vídeos. */
+  items?: InstagramCarouselItem[];
+  /** @deprecated use `items`; mantido para compatibilidade (só imagens). */
+  imageUrls?: string[];
   caption: string;
   accessToken: string;
   accountId: string;
 }): Promise<PublishImageResult> {
-  const { imageUrls, caption, accessToken, accountId } = params;
-  const valid = imageUrls.filter((u) => isImageUrlValidForInstagram(u));
+  const { caption, accessToken, accountId } = params;
+  const captionSafe = clampInstagramCaptionText(caption);
+  const normalizedLen = (caption ?? "")
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ").length;
+  if (normalizedLen > 2200) {
+    console.warn(
+      "[instagram-publish] Carrossel: legenda truncada para 2200 caracteres (limite Instagram).",
+      { originalLength: normalizedLen, usedLength: captionSafe.length },
+    );
+  }
+  const items: InstagramCarouselItem[] =
+    params.items?.length
+      ? params.items
+      : (params.imageUrls ?? []).map((url) => ({
+          kind: "image" as const,
+          url,
+        }));
+  const valid = items.filter(isCarouselItemValid);
   if (valid.length < CAROUSEL_MIN_ITEMS || valid.length > CAROUSEL_MAX_ITEMS) {
     throw new Error(
-      `Carrossel precisa de entre ${CAROUSEL_MIN_ITEMS} e ${CAROUSEL_MAX_ITEMS} imagens com URL pública. Recebido: ${valid.length}.`,
+      `Carrossel precisa de entre ${CAROUSEL_MIN_ITEMS} e ${CAROUSEL_MAX_ITEMS} mídias com URL pública. Recebido: ${valid.length}.`,
     );
   }
   console.log("[instagram-publish] Carrossel: início", {
     itemCount: valid.length,
-    captionLength: caption?.length,
+    kinds: valid.map((v) => v.kind),
+    captionLengthOriginal: caption?.length,
+    captionLengthUsed: captionSafe.length,
     accountId: accountId ? `${accountId.slice(0, 4)}...` : "(vazio)",
   });
 
   const childIds: string[] = [];
   for (let i = 0; i < valid.length; i++) {
-    const imageUrl = valid[i];
-    const createUrl = `${GRAPH_API_BASE}/${accountId}/media?image_url=${encodeURIComponent(imageUrl)}&is_carousel_item=true&access_token=${encodeURIComponent(accessToken)}`;
-    const createRes = await fetch(createUrl, { method: "POST" });
-    const createData = await createRes.json();
-    if (!createRes.ok && isTokenExpiredError(createData)) {
+    const item = valid[i];
+    const createUrl =
+      item.kind === "video"
+        ? `${GRAPH_API_BASE}/${accountId}/media?media_type=VIDEO&video_url=${encodeURIComponent(item.url)}&is_carousel_item=true&access_token=${encodeURIComponent(accessToken)}`
+        : `${GRAPH_API_BASE}/${accountId}/media?image_url=${encodeURIComponent(item.url)}&is_carousel_item=true&access_token=${encodeURIComponent(accessToken)}`;
+    const { ok: childOk, data: createData } = await graphPostJsonWithRetry(
+      createUrl,
+      `Carrossel item ${i + 1}/${valid.length}`,
+    );
+    if (!childOk && isTokenExpiredError(createData)) {
       throw new Error(
         "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
       );
     }
-    if (!createRes.ok && isMediaUriError(createData)) {
+    if (!childOk && isMediaUriError(createData)) {
       const msg =
         (createData as { error?: { message?: string } })?.error?.message ||
         "Erro Meta API";
+      throw new Error(msg);
+    }
+    if (!childOk) {
+      const msg =
+        (createData as { error?: { message?: string } })?.error?.message ||
+        "Erro ao criar item do carrossel";
       throw new Error(msg);
     }
     const id = (createData as { id?: string }).id;
@@ -424,18 +765,38 @@ export async function publishCarouselToInstagram(params: {
       index: i + 1,
       id,
     });
+    await waitForIgContainerFinished({
+      containerId: id,
+      accessToken,
+      label: `Carrossel item ${i + 1}/${valid.length}`,
+      isVideo: item.kind === "video",
+    });
   }
 
+  console.log(
+    "[instagram-publish] Carrossel: todos os itens FINISHED; breve pausa antes do container pai...",
+  );
+  await new Promise((r) => setTimeout(r, 1500));
+
   const childrenParam = childIds.join(",");
-  const createParentUrl = `${GRAPH_API_BASE}/${accountId}/media?media_type=CAROUSEL&children=${encodeURIComponent(childrenParam)}&caption=${encodeURIComponent(caption)}&access_token=${encodeURIComponent(accessToken)}`;
-  const parentRes = await fetch(createParentUrl, { method: "POST" });
-  const parentData = await parentRes.json();
-  if (!parentRes.ok && isTokenExpiredError(parentData)) {
+  const mediaEndpoint = `${GRAPH_API_BASE}/${accountId}/media`;
+  const { ok: parentOk, data: parentData } =
+    await graphPostFormUrlEncodedWithRetry(
+      mediaEndpoint,
+      {
+        media_type: "CAROUSEL",
+        children: childrenParam,
+        caption: captionSafe,
+        access_token: accessToken,
+      },
+      "Carrossel (container)",
+    );
+  if (!parentOk && isTokenExpiredError(parentData)) {
     throw new Error(
       "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
     );
   }
-  if (!parentRes.ok) {
+  if (!parentOk) {
     const msg =
       (parentData as { error?: { message?: string } })?.error?.message ||
       "Erro ao criar carrossel";
@@ -448,28 +809,46 @@ export async function publishCarouselToInstagram(params: {
     "[instagram-publish] Carrossel: aguardando 5s antes de publish...",
   );
   await new Promise((r) => setTimeout(r, 5000));
-  let publishRes = await fetch(
-    `${GRAPH_API_BASE}/${accountId}/media_publish?creation_id=${parentId}&access_token=${encodeURIComponent(accessToken)}`,
-    { method: "POST" },
+  const publishUrl = `${GRAPH_API_BASE}/${accountId}/media_publish?creation_id=${parentId}&access_token=${encodeURIComponent(accessToken)}`;
+  let { ok: publishOk, data: publishData } = await graphPostJsonWithRetry(
+    publishUrl,
+    "Carrossel media_publish",
   );
-  let publishData = await publishRes.json();
-  if (!publishRes.ok && isMediaNotReadyError(publishData)) {
+  for (
+    let waitRound = 0;
+    !publishOk && isMediaNotReadyError(publishData) && waitRound < 6;
+    waitRound++
+  ) {
     console.log(
-      "[instagram-publish] Carrossel: media não pronta, retry em 6s...",
+      `[instagram-publish] Carrossel: mídia ainda não pronta na Meta, aguardando 6s (extra ${waitRound + 1}/6)...`,
     );
     await new Promise((r) => setTimeout(r, 6000));
-    publishRes = await fetch(
-      `${GRAPH_API_BASE}/${accountId}/media_publish?creation_id=${parentId}&access_token=${encodeURIComponent(accessToken)}`,
-      { method: "POST" },
-    );
-    publishData = await publishRes.json();
+    const res = await fetch(publishUrl, { method: "POST" });
+    publishData = await res.json();
+    publishOk = res.ok;
+    if (!res.ok) {
+      logMetaGraphApiFailure(
+        `Carrossel media_publish (após espera mídia, round ${waitRound + 1})`,
+        res.status,
+        publishData,
+        publishUrl,
+      );
+    }
   }
-  if (!publishRes.ok && isTokenExpiredError(publishData)) {
+  if (!publishOk && isTokenExpiredError(publishData)) {
     throw new Error(
       "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
     );
   }
-  if (!publishRes.ok) {
+  if (!publishOk) {
+    console.error(
+      "[instagram-publish] Carrossel media_publish (final, sem sucesso após retries)",
+      {
+        requestUrl: redactTokenInUrl(publishUrl),
+        responseJson: JSON.stringify(publishData),
+        parsed: publishData,
+      },
+    );
     const msg =
       (publishData as { error?: { message?: string } })?.error?.message ||
       "Erro ao publicar carrossel";

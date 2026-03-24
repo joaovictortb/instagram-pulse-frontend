@@ -141,6 +141,185 @@ function needsClip(meta: VideoMeta, target: "reels" | "story"): boolean {
   return target === "story" ? meta.needsClipForStory : meta.needsClipForReel;
 }
 
+function subtitleFontStack(family: SubtitleFontFamily): string {
+  switch (family) {
+    case "Verdana":
+      return "Verdana, Geneva, sans-serif";
+    case "Helvetica":
+      return "Helvetica, Arial, sans-serif";
+    case "DejaVu Sans":
+      return '"DejaVu Sans", "Liberation Sans", Arial, sans-serif';
+    default:
+      return "Arial, Helvetica, sans-serif";
+  }
+}
+
+/** Miniatura YouTube + sobreposições — atualiza em tempo real ao mudar passos 2–4. */
+function YoutubeLiveCompositionPreview({
+  videoMeta,
+  isShorts,
+  burnSubtitles,
+  subtitleLocale,
+  subtitleFontSize,
+  subtitlePosition,
+  subtitleFontFamily,
+  videoTitle,
+  titlePosition,
+  titleColorCss,
+  titleFontSize,
+  titleFontFamily,
+  showTitleOverlay,
+  target,
+  caption,
+  watchUrl,
+  verticalFrame,
+}: {
+  videoMeta: VideoMeta;
+  /** Miniatura / moldura: 9:16 se Shorts, vídeo vertical, ou Story com reframe 9:16. */
+  verticalFrame: boolean;
+  isShorts: boolean;
+  burnSubtitles: boolean;
+  subtitleLocale: "pt-BR" | "en";
+  subtitleFontSize: number;
+  subtitlePosition: TitlePosition;
+  subtitleFontFamily: SubtitleFontFamily;
+  videoTitle: string;
+  titlePosition: TitlePosition;
+  titleColorCss: string;
+  titleFontSize: number;
+  titleFontFamily: SubtitleFontFamily;
+  /** Se false, não mostra título na miniatura (alinhado a «Sem título no vídeo»). */
+  showTitleOverlay: boolean;
+  target: "reels" | "story";
+  caption: string;
+  watchUrl: string;
+}) {
+  const vertical = verticalFrame;
+  const thumbPrimary =
+    videoMeta.thumbnailUrl?.trim() ||
+    `https://img.youtube.com/vi/${videoMeta.videoId}/maxresdefault.jpg`;
+  const thumbFallback = `https://img.youtube.com/vi/${videoMeta.videoId}/hqdefault.jpg`;
+  const [thumbSrc, setThumbSrc] = useState(thumbPrimary);
+
+  useEffect(() => {
+    setThumbSrc(thumbPrimary);
+  }, [thumbPrimary]);
+
+  const titleText =
+    videoTitle.trim() ||
+    (videoMeta.title ? videoMeta.title.slice(0, 96) : "Título do vídeo");
+  const sampleSub =
+    subtitleLocale === "pt-BR"
+      ? "Exemplo de legenda queimada — ajusta fonte, tamanho e posição no passo 3."
+      : "Sample burned subtitle — adjust font, size and position in step 3.";
+
+  const titlePosClass =
+    titlePosition === "top"
+      ? "top-0 left-0 right-0 pt-3 px-3 text-center"
+      : titlePosition === "center"
+        ? "left-1/2 top-1/2 w-[92%] -translate-x-1/2 -translate-y-1/2 text-center"
+        : "bottom-0 left-0 right-0 pb-16 px-3 text-center";
+
+  const subPosClass =
+    subtitlePosition === "top"
+      ? "top-12 left-0 right-0 px-3 text-center"
+      : subtitlePosition === "center"
+        ? "left-1/2 top-1/2 w-[94%] -translate-x-1/2 -translate-y-1/2 text-center"
+        : "bottom-3 left-0 right-0 px-3 text-center";
+
+  const captionPreview =
+    caption.trim() ||
+    (target === "reels"
+      ? "Legenda do Reel (passo 4) — gera texto no passo 3 ou escreve aqui."
+      : "Na Story não há legenda de feed como no Reel.");
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+          Pré-visualização (tempo real)
+        </span>
+        <a
+          href={watchUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-sky-400/95 underline-offset-2 hover:text-sky-300 hover:underline"
+        >
+          <Youtube size={14} className="shrink-0" />
+          Abrir no YouTube
+        </a>
+      </div>
+      <p className="text-[11px] leading-relaxed text-zinc-600">
+        Usamos a miniatura oficial do vídeo (aproxima o 1.º frame). O MP4 final
+        pode variar ligeiramente após corte e legendas na Cloudinary.
+      </p>
+      <div
+        className={`relative mx-auto w-full overflow-hidden rounded-xl border border-white/10 bg-black shadow-lg ${
+          vertical ? "aspect-9/16 max-w-[260px]" : "aspect-video max-w-lg"
+        }`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={thumbSrc}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={() => setThumbSrc(thumbFallback)}
+        />
+        {showTitleOverlay ? (
+          <div
+            className={`pointer-events-none absolute z-10 ${titlePosClass}`}
+            style={{
+              color: titleColorCss,
+              fontFamily: subtitleFontStack(titleFontFamily),
+              textShadow:
+                "0 1px 2px rgba(0,0,0,0.9), 0 0 12px rgba(0,0,0,0.75)",
+              fontSize: Math.max(
+                10,
+                Math.min(26, Math.round(titleFontSize * 0.38)),
+              ),
+              fontWeight: 700,
+              lineHeight: 1.25,
+            }}
+          >
+            {titleText}
+          </div>
+        ) : (
+          <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md bg-black/70 px-2 py-1 text-[10px] font-medium text-zinc-400">
+            Sem título no vídeo
+          </div>
+        )}
+        {burnSubtitles ? (
+          <div
+            className={`pointer-events-none absolute z-20 ${subPosClass}`}
+            style={{
+              fontFamily: subtitleFontStack(subtitleFontFamily),
+              fontSize: subtitleFontSize,
+              lineHeight: 1.35,
+              color: "#ffffff",
+              textShadow:
+                "0 0 2px #000, 0 0 6px #000, 0 2px 8px rgba(0,0,0,0.95)",
+            }}
+          >
+            {sampleSub}
+          </div>
+        ) : (
+          <div className="pointer-events-none absolute bottom-2 right-2 z-20 rounded-md bg-black/70 px-2 py-1 text-[10px] font-medium text-zinc-400">
+            Legendas desativadas
+          </div>
+        )}
+      </div>
+      <div className="rounded-lg border border-white/[0.08] bg-zinc-950/80 p-3">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          Legenda do post ({target === "reels" ? "Reel" : "Story"})
+        </p>
+        <p className="mt-1.5 line-clamp-5 text-xs leading-relaxed text-zinc-300">
+          {captionPreview}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function YoutubeImportPage() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
@@ -159,6 +338,13 @@ export default function YoutubeImportPage() {
   const [videoTitle, setVideoTitle] = useState("");
   const [titlePosition, setTitlePosition] = useState<TitlePosition>("bottom");
   const [titleColorHex, setTitleColorHex] = useState("ffffff");
+  const [titleFontSize, setTitleFontSize] = useState(56);
+  const [titleFontFamily, setTitleFontFamily] =
+    useState<SubtitleFontFamily>("Arial");
+  /** Se true, não aplica overlay de título na Cloudinary nem na pré-visualização. */
+  const [skipTitleOnVideo, setSkipTitleOnVideo] = useState(false);
+  /** Story: recorta o vídeo para 9:16 (1080×1920) no servidor — útil para vídeo horizontal. */
+  const [reframeToStoryVertical, setReframeToStoryVertical] = useState(false);
   const [captionTone, setCaptionTone] = useState<CaptionTone>("informal");
   const [aiRecommendationsMd, setAiRecommendationsMd] = useState("");
   const [generatedCaptions, setGeneratedCaptions] = useState<string[]>([]);
@@ -186,6 +372,7 @@ export default function YoutubeImportPage() {
         p: subtitlePosition,
         ff: subtitleFontFamily,
         t: target,
+        r916: target === "story" && reframeToStoryVertical,
       }),
     [
       youtubeUrl,
@@ -196,10 +383,15 @@ export default function YoutubeImportPage() {
       subtitlePosition,
       subtitleFontFamily,
       target,
+      reframeToStoryVertical,
     ],
   );
   const processVideoKeyRef = useRef(processVideoKey);
   processVideoKeyRef.current = processVideoKey;
+
+  useEffect(() => {
+    if (target !== "story") setReframeToStoryVertical(false);
+  }, [target]);
 
   useEffect(() => {
     try {
@@ -279,10 +471,6 @@ export default function YoutubeImportPage() {
   );
   const isShorts = useMemo(() => isYoutubeShortsUrl(youtubeUrl), [youtubeUrl]);
   const urlMismatch = !!videoMeta && !!videoId && videoMeta.videoId !== videoId;
-
-  const embedUrl = videoId
-    ? `https://www.youtube.com/embed/${videoId}?modestbranding=1&rel=0`
-    : null;
 
   const titleColorCss = useMemo(() => {
     const h = titleColorHex.replace(/^#/, "").trim();
@@ -469,6 +657,8 @@ export default function YoutubeImportPage() {
           subtitleFontSize: burnSubtitles ? subtitleFontSize : undefined,
           subtitlePosition: burnSubtitles ? subtitlePosition : undefined,
           subtitleFontFamily: burnSubtitles ? subtitleFontFamily : undefined,
+          reframeToStoryVertical:
+            target === "story" && reframeToStoryVertical ? true : undefined,
         }),
       });
       const data = await readJsonBody<{
@@ -503,13 +693,16 @@ export default function YoutubeImportPage() {
             }
           : undefined;
 
+      const titleActive = !skipTitleOnVideo && !!videoTitle.trim();
       const base = {
         target,
         caption: caption.trim() || undefined,
         shareToFeed: true,
-        videoTitle: videoTitle.trim() || undefined,
-        titlePosition: videoTitle.trim() ? titlePosition : undefined,
-        titleColorHex: videoTitle.trim() ? titleColorHex : undefined,
+        videoTitle: titleActive ? videoTitle.trim() : undefined,
+        titlePosition: titleActive ? titlePosition : undefined,
+        titleColorHex: titleActive ? titleColorHex : undefined,
+        titleFontSize: titleActive ? titleFontSize : undefined,
+        titleFontFamily: titleActive ? titleFontFamily : undefined,
       };
 
       const body = reuse
@@ -527,6 +720,8 @@ export default function YoutubeImportPage() {
             subtitleFontSize: burnSubtitles ? subtitleFontSize : undefined,
             subtitlePosition: burnSubtitles ? subtitlePosition : undefined,
             subtitleFontFamily: burnSubtitles ? subtitleFontFamily : undefined,
+            reframeToStoryVertical:
+              target === "story" && reframeToStoryVertical ? true : undefined,
           };
 
       const res = await apiFetch("/api/content/youtube-to-instagram", {
@@ -816,6 +1011,34 @@ export default function YoutubeImportPage() {
                     </p>
                   ) : null}
                 </label>
+
+                {target === "story" ? (
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.07] px-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={reframeToStoryVertical}
+                      onChange={(e) =>
+                        setReframeToStoryVertical(e.target.checked)
+                      }
+                      className="mt-0.5 accent-brand-primary"
+                    />
+                    <span className="text-sm text-zinc-300">
+                      <span className="font-medium text-cyan-100/95">
+                        Formato vertical Story (9:16)
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+                        Recorta e escala para{" "}
+                        <strong className="text-zinc-400">1080×1920</strong>{" "}
+                        (estilo Shorts). Ideal para vídeos{" "}
+                        <strong className="text-zinc-400">horizontais</strong>{" "}
+                        (16:9) — corta as laterais ao centro. Aplica-se no
+                        servidor <strong className="text-zinc-400">antes</strong>{" "}
+                        das legendas. Volta a gerar a pré-visualização se
+                        mudares.
+                      </span>
+                    </span>
+                  </label>
+                ) : null}
               </div>
             </div>
           </section>
@@ -1052,7 +1275,9 @@ export default function YoutubeImportPage() {
                       controls
                       playsInline
                       className={`w-full rounded-xl border border-emerald-500/25 bg-black ${
-                        isShorts || videoMeta.isVertical
+                        isShorts ||
+                        videoMeta.isVertical ||
+                        (target === "story" && reframeToStoryVertical)
                           ? "aspect-9/16 max-w-[280px]"
                           : "aspect-video max-w-xl"
                       }`}
@@ -1077,30 +1302,31 @@ export default function YoutubeImportPage() {
                   </p>
                 )}
 
-                {embedUrl ? (
-                  <details className="group rounded-xl border border-white/10 bg-zinc-950/40">
-                    <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-zinc-400 group-open:text-zinc-300">
-                      Original no YouTube
-                    </summary>
-                    <div className="border-t border-white/8 p-3">
-                      <div
-                        className={`relative mx-auto w-full overflow-hidden rounded-lg border border-white/10 bg-black ${
-                          isShorts || videoMeta.isVertical
-                            ? "aspect-9/16 max-w-[220px]"
-                            : "aspect-video max-w-lg"
-                        }`}
-                      >
-                        <iframe
-                          title="YouTube"
-                          src={embedUrl}
-                          className="absolute inset-0 h-full w-full"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                        />
-                      </div>
-                    </div>
-                  </details>
-                ) : null}
+                <div className="rounded-xl border border-white/[0.08] bg-zinc-950/50 p-3 sm:p-4">
+                  <YoutubeLiveCompositionPreview
+                    videoMeta={videoMeta}
+                    verticalFrame={
+                      isShorts ||
+                      videoMeta.isVertical ||
+                      (target === "story" && reframeToStoryVertical)
+                    }
+                    isShorts={isShorts}
+                    burnSubtitles={burnSubtitles}
+                    subtitleLocale={subtitleLocale}
+                    subtitleFontSize={subtitleFontSize}
+                    subtitlePosition={subtitlePosition}
+                    subtitleFontFamily={subtitleFontFamily}
+                    videoTitle={videoTitle}
+                    titlePosition={titlePosition}
+                    titleColorCss={titleColorCss}
+                    titleFontSize={titleFontSize}
+                    titleFontFamily={titleFontFamily}
+                    showTitleOverlay={!skipTitleOnVideo}
+                    target={target}
+                    caption={caption}
+                    watchUrl={`https://www.youtube.com/watch?v=${videoMeta.videoId}`}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-col gap-5">
@@ -1108,6 +1334,23 @@ export default function YoutubeImportPage() {
                   <legend className="px-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
                     Título no vídeo (opcional, Cloudinary)
                   </legend>
+                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-white/10 bg-zinc-900/50 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={skipTitleOnVideo}
+                      onChange={(e) => setSkipTitleOnVideo(e.target.checked)}
+                      className="mt-0.5 accent-brand-primary"
+                    />
+                    <span className="text-sm text-zinc-300">
+                      <span className="font-medium text-zinc-200">
+                        Sem título no vídeo
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+                        Só publica o vídeo (e legendas queimadas, se ativas). Não
+                        aplica texto sobreposto via Cloudinary.
+                      </span>
+                    </span>
+                  </label>
                   <div className="flex items-center gap-2 text-zinc-400">
                     <Type size={16} className="shrink-0 text-brand-primary" />
                     <input
@@ -1116,7 +1359,8 @@ export default function YoutubeImportPage() {
                       onChange={(e) => setVideoTitle(e.target.value)}
                       placeholder="Texto sobre o vídeo"
                       maxLength={96}
-                      className={inputCls}
+                      disabled={skipTitleOnVideo}
+                      className={inputCls + " disabled:opacity-40"}
                     />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1127,7 +1371,7 @@ export default function YoutubeImportPage() {
                         onChange={(e) =>
                           setTitlePosition(e.target.value as TitlePosition)
                         }
-                        disabled={!videoTitle.trim()}
+                        disabled={skipTitleOnVideo || !videoTitle.trim()}
                         className={selectCls + " disabled:opacity-40"}
                       >
                         <option value="bottom">Inferior</option>
@@ -1144,7 +1388,7 @@ export default function YoutubeImportPage() {
                           onChange={(e) =>
                             setTitleColorHex(e.target.value.replace("#", ""))
                           }
-                          disabled={!videoTitle.trim()}
+                          disabled={skipTitleOnVideo || !videoTitle.trim()}
                           className="h-[42px] w-14 cursor-pointer rounded-lg border border-dashboard-border bg-zinc-900 disabled:opacity-40"
                         />
                         <input
@@ -1157,13 +1401,55 @@ export default function YoutubeImportPage() {
                           }
                           placeholder="ffffff"
                           maxLength={6}
-                          disabled={!videoTitle.trim()}
+                          disabled={skipTitleOnVideo || !videoTitle.trim()}
                           className={
                             inputCls +
                             " font-mono uppercase disabled:opacity-40"
                           }
                         />
                       </div>
+                    </label>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-1.5">
+                      <span className="text-[11px] text-zinc-500">Fonte</span>
+                      <select
+                        value={titleFontFamily}
+                        onChange={(e) =>
+                          setTitleFontFamily(
+                            e.target.value as SubtitleFontFamily,
+                          )
+                        }
+                        disabled={skipTitleOnVideo || !videoTitle.trim()}
+                        className={selectCls + " disabled:opacity-40"}
+                      >
+                        <option value="Arial">Arial</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Helvetica">Helvetica</option>
+                        <option value="DejaVu Sans">DejaVu Sans</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1.5">
+                      <span className="text-[11px] text-zinc-500">
+                        Tamanho (px)
+                      </span>
+                      <select
+                        value={titleFontSize}
+                        onChange={(e) =>
+                          setTitleFontSize(Number(e.target.value))
+                        }
+                        disabled={skipTitleOnVideo || !videoTitle.trim()}
+                        className={selectCls + " disabled:opacity-40"}
+                      >
+                        {[
+                          28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 96,
+                          112,
+                        ].map((n) => (
+                          <option key={n} value={n}>
+                            {n}px{n === 56 ? " — padrão" : ""}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 </fieldset>
