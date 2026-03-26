@@ -46,6 +46,7 @@ import {
 import {
   publishImageToInstagram,
   publishStoryImageToInstagram,
+  publishStoryVideoToInstagram,
   publishCarouselToInstagram,
   publishReelToInstagram,
   type InstagramCarouselItem,
@@ -350,6 +351,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     CarouselMediaItem[]
   >([]);
   const [publishAsCarousel, setPublishAsCarousel] = useState(false);
+  // Stories: opção de publicar mídia original da notícia (imagem/vídeo) ao invés do template
+  const [publishStoryFromNewsMedia, setPublishStoryFromNewsMedia] =
+    useState(false);
+  const [storySelectedMediaIndex, setStorySelectedMediaIndex] = useState(0);
   /** Índice do slide exibido no preview do carrossel (área central). */
   const [carouselPreviewIndex, setCarouselPreviewIndex] = useState(0);
   /** Data URL da 1ª imagem (para captura do carrossel sem tainting por cross-origin). */
@@ -507,6 +512,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
   // Resetar slide do preview do carrossel quando a lista de mídias mudar
   useEffect(() => {
     setCarouselPreviewIndex(0);
+    setStorySelectedMediaIndex(0);
   }, [fetchedCarouselMedia.length]);
 
   const removeCarouselMediaItem = (index: number) => {
@@ -517,6 +523,11 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       setCarouselPreviewIndex((i) => i - 1);
     else if (index === carouselPreviewIndex)
       setCarouselPreviewIndex(Math.min(carouselPreviewIndex, next.length - 1));
+    if (next.length <= 1) setStorySelectedMediaIndex(0);
+    else if (index < storySelectedMediaIndex)
+      setStorySelectedMediaIndex((i) => Math.max(0, i - 1));
+    else if (index === storySelectedMediaIndex)
+      setStorySelectedMediaIndex(Math.min(storySelectedMediaIndex, next.length - 1));
   };
 
   // Ao escolher Stories, o preview passa para 9:16 (1080×1920) para refletir o que será publicado
@@ -537,6 +548,13 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       setPublishAsCarousel(false);
     }
   }, [publishDestination, publishAsCarousel]);
+
+  // Stories não usa carrossel; só um item (opcionalmente mídia da notícia)
+  useEffect(() => {
+    if (publishDestination !== "stories" && publishStoryFromNewsMedia) {
+      setPublishStoryFromNewsMedia(false);
+    }
+  }, [publishDestination, publishStoryFromNewsMedia]);
 
   async function createStillVideoFromImageDataUrl(params: {
     imageDataUrl: string;
@@ -1309,7 +1327,18 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       const upload = await uploadVideoToCloudinary(blob, {
         fileName: `carousel-${index}.${ext}`,
       });
-      return upload.secureUrl;
+      // Importante: no Feed, vídeos 9:16 costumam ser "zoomados/cortados" pelo Instagram.
+      // Para preservar o quadro inteiro, publicamos um vídeo 4:5 (ou 1:1) com padding (barras),
+      // mantendo o conteúdo 9:16 inteiro dentro do frame.
+      const { width, height } = getFeedDimensionsForFormat(activeFormat);
+      const ar = `${width}:${height}`;
+      const transformed = upload.secureUrl
+        .replace(
+          "/upload/",
+          `/upload/c_pad,ar_${ar},w_${width},h_${height},b_black,f_mp4/`,
+        )
+        .replace(/\.(webm|mov|mkv|ogg)(\?.*)?$/i, ".mp4$2");
+      return transformed;
     } catch (err) {
       console.error(
         "[editor-post] publishToInstagram: erro ao espelhar vídeo de carrossel na Cloudinary",
@@ -1677,6 +1706,42 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
         node.classList.add("opacity-0", "-z-10");
       }
       if (isStories) {
+        // Se o usuário escolheu publicar a mídia da notícia (imagem/vídeo) no Story,
+        // não usa o template renderizado em canvas.
+        if (publishStoryFromNewsMedia) {
+          const sel =
+            fetchedCarouselMedia[Math.min(storySelectedMediaIndex, fetchedCarouselMedia.length - 1)];
+          if (!sel) {
+            throw new Error("Nenhuma mídia selecionada para Story.");
+          }
+          if (sel.kind === "video") {
+            const mirrored = await mirrorCarouselVideoToCloudinary(sel.url, 1);
+            await publishStoryVideoToInstagram({
+              videoUrl: mirrored ?? sel.url,
+              accessToken: config.accessToken,
+              accountId: config.accountId,
+            });
+          } else {
+            await publishStoryImageToInstagram({
+              imageUrl: sel.url,
+              accessToken: config.accessToken,
+              accountId: config.accountId,
+            });
+          }
+          setPublishMessage({ type: "success", text: "Story publicado!" });
+          setTimeout(() => setPublishMessage(null), 5000);
+          setTimeout(() => window.location.reload(), 2500);
+          const marked = await markArticleInstagramPublished(
+            article.dataSourceIdentifier,
+          );
+          if (!marked) {
+            console.warn(
+              "[editor-post] Não foi possível marcar o artigo como publicado no Instagram no Supabase. A notícia sairá da listagem após aplicar a migration 005 e recarregar.",
+            );
+          }
+          return;
+        }
+
         console.log(
           "[editor-post] publishToInstagram: redimensionando para Stories 1080×1920...",
         );
@@ -1730,15 +1795,15 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               item.url,
               i + 2,
             );
-            if (uploadedUrl)
-              mirroredExtra.push({ kind: "image", url: uploadedUrl });
+            // Se falhar o espelhamento (CORS/hotlink), ainda tentamos publicar com a URL original.
+            mirroredExtra.push({ kind: "image", url: uploadedUrl ?? item.url });
           } else {
             const uploadedUrl = await mirrorCarouselVideoToCloudinary(
               item.url,
               i + 2,
             );
-            if (uploadedUrl)
-              mirroredExtra.push({ kind: "video", url: uploadedUrl });
+            // Se falhar o espelhamento (CORS/hotlink), ainda tentamos publicar com a URL original.
+            mirroredExtra.push({ kind: "video", url: uploadedUrl ?? item.url });
           }
         }
         const carouselItems: InstagramCarouselItem[] = [
@@ -8136,11 +8201,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                         ) : currentMedia?.kind === "video" ? (
                           <video
                             src={currentMedia.url}
-                            className={cn(
-                              "w-full h-full object-cover transition-opacity duration-200",
-                              imagePositionClass,
-                            )}
-                            style={imageObjectPositionStyle}
+                            className="w-full h-full object-contain bg-black transition-opacity duration-200"
                             controls
                             playsInline
                             preload="metadata"
@@ -8979,7 +9040,8 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   </div>
 
                   {(publishDestination === "feed" ||
-                    publishDestination === "reels") && (
+                    publishDestination === "reels" ||
+                    publishDestination === "stories") && (
                     <>
                       {/* ESPN URL */}
                       <div className="space-y-2">
@@ -9015,38 +9077,85 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                       </div>
 
                       {/* Carousel thumbnails */}
-                      {publishDestination === "feed" &&
-                        fetchedCarouselMedia.length >= 2 && (
+                      {(publishDestination === "feed" ||
+                        publishDestination === "stories") &&
+                        fetchedCarouselMedia.length >=
+                          (publishDestination === "stories" ? 1 : 2) && (
                           <div className="space-y-2">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={publishAsCarousel}
-                                onChange={(e) =>
-                                  setPublishAsCarousel(e.target.checked)
-                                }
-                                className="rounded border-white/30 bg-black/40 text-pink-500"
-                              />
-                              <span className="text-white/65 text-xs">
-                                Carrossel ({fetchedCarouselMedia.length} itens
-                                {fetchedCarouselMedia.some(
-                                  (m) => m.kind === "video",
-                                )
-                                  ? " · inclui vídeo(s)"
-                                  : ""}
-                                )
-                              </span>
-                            </label>
+                            {publishDestination === "feed" ? (
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={publishAsCarousel}
+                                  onChange={(e) =>
+                                    setPublishAsCarousel(e.target.checked)
+                                  }
+                                  className="rounded border-white/30 bg-black/40 text-pink-500"
+                                />
+                                <span className="text-white/65 text-xs">
+                                  Carrossel ({fetchedCarouselMedia.length} itens
+                                  {fetchedCarouselMedia.some(
+                                    (m) => m.kind === "video",
+                                  )
+                                    ? " · inclui vídeo(s)"
+                                    : ""}
+                                  )
+                                </span>
+                              </label>
+                            ) : (
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={publishStoryFromNewsMedia}
+                                  onChange={(e) =>
+                                    setPublishStoryFromNewsMedia(
+                                      e.target.checked,
+                                    )
+                                  }
+                                  className="rounded border-white/30 bg-black/40 text-pink-500"
+                                />
+                                <span className="text-white/65 text-xs">
+                                  Story pela mídia da notícia (selecionar abaixo)
+                                </span>
+                              </label>
+                            )}
                             <div className="flex gap-1.5 overflow-x-auto pb-1">
                               {fetchedCarouselMedia.map((item, i) => (
                                 <div
                                   key={`${item.kind}-${item.url}-${i}`}
-                                  className="relative shrink-0 w-12 h-12 rounded-lg overflow-hidden border border-white/20 bg-black/40 group"
+                                  className={cn(
+                                    "relative shrink-0 w-12 h-12 rounded-lg overflow-hidden border bg-black/40 group",
+                                    publishDestination === "stories" &&
+                                      publishStoryFromNewsMedia &&
+                                      i === storySelectedMediaIndex
+                                      ? "border-pink-400/80"
+                                      : "border-white/20",
+                                  )}
+                                  onClick={() => {
+                                    if (
+                                      publishDestination === "stories" &&
+                                      publishStoryFromNewsMedia
+                                    ) {
+                                      setStorySelectedMediaIndex(i);
+                                    }
+                                  }}
+                                  role={
+                                    publishDestination === "stories" &&
+                                    publishStoryFromNewsMedia
+                                      ? "button"
+                                      : undefined
+                                  }
+                                  tabIndex={
+                                    publishDestination === "stories" &&
+                                    publishStoryFromNewsMedia
+                                      ? 0
+                                      : undefined
+                                  }
                                 >
                                   {item.kind === "video" ? (
                                     <video
                                       src={item.url}
-                                      className="w-full h-full object-cover"
+                                      className="w-full h-full object-contain bg-black"
                                       muted
                                       playsInline
                                       preload="metadata"
@@ -9072,6 +9181,62 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                                 </div>
                               ))}
                             </div>
+                            {publishDestination === "stories" &&
+                            publishStoryFromNewsMedia ? (
+                              <div className="rounded-xl border border-white/10 bg-black/30 p-2.5">
+                                <div className="mb-2 text-white/45 text-[10px] font-bold uppercase tracking-widest">
+                                  Preview do Story (mídia selecionada)
+                                </div>
+                                <div className="mx-auto w-full max-w-[240px] aspect-[9/16] overflow-hidden rounded-lg border border-white/10 bg-black">
+                                  {(() => {
+                                    const sel =
+                                      fetchedCarouselMedia[
+                                        Math.min(
+                                          storySelectedMediaIndex,
+                                          fetchedCarouselMedia.length - 1,
+                                        )
+                                      ];
+                                    if (!sel) return null;
+                                    if (sel.kind === "video") {
+                                      return (
+                                        <video
+                                          src={sel.url}
+                                          className="w-full h-full object-contain bg-black"
+                                          controls
+                                          playsInline
+                                          preload="metadata"
+                                        />
+                                      );
+                                    }
+                                    return (
+                                      <img
+                                        src={sel.url}
+                                        alt=""
+                                        className="w-full h-full object-contain bg-black"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+                            ) : null}
+                            {fetchedCarouselMedia.some((m) => m.kind === "video") && (
+                              <div className="space-y-1.5">
+                                <div className="text-white/45 text-[10px] font-bold uppercase tracking-widest">
+                                  URLs dos vídeos
+                                </div>
+                                <textarea
+                                  readOnly
+                                  value={fetchedCarouselMedia
+                                    .filter((m) => m.kind === "video")
+                                    .map((m) => m.url)
+                                    .filter(Boolean)
+                                    .join("\n")}
+                                  className="w-full bg-black/40 border border-white/10 rounded-xl p-2.5 text-white text-[11px] placeholder:text-white/25 focus:border-white/30 outline-none min-h-[64px] resize-y"
+                                  rows={3}
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
 

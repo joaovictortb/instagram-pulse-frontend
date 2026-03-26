@@ -585,6 +585,67 @@ export async function publishStoryImageToInstagram(params: {
   return { mediaId };
 }
 
+/** Stories: vídeo (sem legenda), recomendado 9:16. */
+export async function publishStoryVideoToInstagram(params: {
+  videoUrl: string;
+  accessToken: string;
+  accountId: string;
+}): Promise<PublishReelResult> {
+  const { videoUrl, accessToken, accountId } = params;
+  console.log("[instagram-publish] Story(video): início", {
+    videoUrlPrefix: videoUrl.slice(0, 50) + "...",
+    accountId: accountId ? `${accountId.slice(0, 4)}...` : "(vazio)",
+  });
+  if (!isVideoUrlValidForInstagram(videoUrl)) {
+    throw new Error(
+      "A URL do vídeo não é válida para o Instagram. Use uma URL pública (HTTPS).",
+    );
+  }
+  const createUrl = `${GRAPH_API_BASE}/${accountId}/media?video_url=${encodeURIComponent(videoUrl)}&media_type=STORIES&access_token=${encodeURIComponent(accessToken)}`;
+  const createRes = await fetch(createUrl, { method: "POST" });
+  const createData = await createRes.json();
+  console.log("[instagram-publish] Story(video): media create response", {
+    ok: createRes.ok,
+    status: createRes.status,
+    hasId: !!(createData as { id?: string }).id,
+    error: (createData as { error?: { code?: number; message?: string } })
+      ?.error,
+  });
+  if (!createRes.ok && isTokenExpiredError(createData)) {
+    console.error("[instagram-publish] Story(video): token expirado", {
+      createData,
+    });
+    throw new Error(
+      "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
+    );
+  }
+  if (!createRes.ok && isMediaUriError(createData)) {
+    const msg =
+      (createData as { error?: { message?: string } })?.error?.message ||
+      "Erro Meta API Story (vídeo)";
+    console.error("[instagram-publish] Story(video): create falhou", {
+      createData,
+    });
+    throw new Error(msg);
+  }
+  const creationId = (createData as { id?: string }).id;
+  if (!creationId) {
+    console.error("[instagram-publish] Story(video): sem creation_id", {
+      createData,
+    });
+    throw new Error("Meta API não retornou creation_id para Story (vídeo)");
+  }
+  const mediaId = await publishWithRetry({
+    accountId,
+    accessToken,
+    creationId,
+    label: "Story(video)",
+    initialWaitMs: 5000,
+    retryDelaysMs: [6000, 8000, 12000],
+  });
+  return { mediaId };
+}
+
 /**
  * Reels: vídeo + legenda. A Meta API exige URL pública HTTPS (video_url).
  * Obs.: Reels é publicado como vídeo; uma imagem não funciona.
