@@ -72,6 +72,8 @@ export default function AudiencePage() {
   const { data: account } = useQuery({
     queryKey: ["instagram-account"],
     queryFn: async () => readJsonBody(await apiFetch("/api/instagram/account")),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const {
@@ -82,6 +84,8 @@ export default function AudiencePage() {
     queryKey: ["instagram-audience"],
     queryFn: async () =>
       readJsonBody<AudienceMaps>(await apiFetch("/api/instagram/audience")),
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const genderAgeMap = audience?.audience_gender_age;

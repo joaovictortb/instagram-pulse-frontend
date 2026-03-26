@@ -2312,8 +2312,20 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       case "TRADED": {
         const fromTeam = team;
         const toTeam = contractingTeam ?? team;
+        const fromLogo =
+          fromTeam.logo ??
+          ALL_NFL_TEAMS.find((t) => t.initials === fromTeam.initials)?.logo ??
+          null;
+        const toLogo =
+          toTeam.logo ??
+          ALL_NFL_TEAMS.find((t) => t.initials === toTeam.initials)?.logo ??
+          null;
         const ringA = logoPx(100);
         const ringB = logoPx(100);
+        // O badge neste template tinha `text-[10px]` fixo; aqui fazemos o size responder a `badgeSize`.
+        const badgeScale = Math.max(0.6, Math.min(2.4, badgeSize / 10));
+        const badgePadX = Math.round(16 * badgeScale);
+        const badgePadY = Math.round(6 * badgeScale);
         return (
           <div className="relative w-full h-full overflow-hidden bg-[#050508]">
             <img
@@ -2352,10 +2364,13 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               style={{ padding: `${marginPx}px` }}
             >
               <div
-                className="mb-8 inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-white/20 bg-black/50 backdrop-blur-md shadow-lg"
-                style={{ ...badgeStyles }}
+                className="mb-8 inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/50 backdrop-blur-md shadow-lg"
+                style={{
+                  ...badgeStyles,
+                  padding: `${badgePadY}px ${badgePadX}px`,
+                }}
               >
-                <span className="text-[10px] font-black uppercase tracking-[0.35em] text-white/90">
+                <span className="font-black uppercase tracking-[0.35em] text-white/90">
                   {badgeText || "TRADE"}
                 </span>
               </div>
@@ -2377,9 +2392,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                         maxHeight: "min(42vw, 140px)",
                       }}
                     >
-                      {!hideTeamLogo && fromTeam.logo ? (
+                      {!hideTeamLogo && fromLogo ? (
                         <img
-                          src={fromTeam.logo}
+                          src={fromLogo}
                           alt=""
                           className="w-[82%] h-[82%] object-contain drop-shadow-xl"
                           referrerPolicy="no-referrer"
@@ -2397,9 +2412,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   <span className="text-[10px] font-black uppercase tracking-widest text-white/90 truncate max-w-full px-1 drop-shadow">
                     {fromTeam.name}
                   </span>
-                  <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
+                  {/* <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
                     Origem
-                  </span>
+                  </span> */}
                 </div>
                 <div className="flex flex-col items-center justify-center shrink-0 gap-2">
                   <ArrowRight
@@ -2427,9 +2442,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                         maxHeight: "min(42vw, 140px)",
                       }}
                     >
-                      {!hideTeamLogo && toTeam.logo ? (
+                      {!hideTeamLogo && toLogo ? (
                         <img
-                          src={toTeam.logo}
+                          src={toLogo}
                           alt=""
                           className="w-[82%] h-[82%] object-contain drop-shadow-xl"
                           referrerPolicy="no-referrer"
@@ -2447,9 +2462,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   <span className="text-[10px] font-black uppercase tracking-widest text-white/90 truncate max-w-full px-1 drop-shadow">
                     {toTeam.name}
                   </span>
-                  <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
+                  {/* <span className="text-[9px] font-bold uppercase tracking-[0.4em] text-white/40">
                     {contractingTeam ? "Destino" : "Destino (time)"}
-                  </span>
+                  </span> */}
                 </div>
               </div>
               <div className="mt-auto pt-8 w-full">
@@ -7076,7 +7091,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   </h2>
                   {subtext ? (
                     <p
-                      className="mt-2 text-zinc-200/90 text-xs font-semibold line-clamp-3"
+                      className="mt-2 text-zinc-200/90 text-xs font-semibold"
                       style={subtextStyles}
                     >
                       {subtext}
@@ -7232,6 +7247,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               referrerPolicy="no-referrer"
               style={imageObjectPositionStyle}
             />
+            tr
             <div
               className="absolute inset-0 bg-gradient-to-b from-[#0a1628]/95 via-[#0a1628]/55 to-[#0a1628]/90"
               style={{ opacity: overlayMult }}
@@ -7278,7 +7294,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   initialsSize="xs"
                 />
                 <span className="text-[9px] font-bold uppercase tracking-widest text-white/40">
-                  NFL · Week slate
+                  CAPITAL NFL
                 </span>
               </div>
             </div>

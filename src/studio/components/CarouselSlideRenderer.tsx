@@ -1502,7 +1502,7 @@ export const SlideRendererGuia = React.forwardRef<
               alt=""
               className={cn(
                 "h-full w-full object-cover",
-                isPlayerSlide ? "opacity-50" : "opacity-30",
+                // isPlayerSlide ? "opacity-50" : "opacity-30",
                 imagePositionClass,
               )}
               style={imageObjectPositionStyle}

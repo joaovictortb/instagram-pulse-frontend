@@ -77,8 +77,8 @@ export default function CommentsPage() {
   const { data: comments, isLoading, isFetching, refetch } = useQuery({
     queryKey: ["instagram-comments"],
     queryFn: () => apiFetchJson<IgComment[]>("/api/instagram/comments"),
-    staleTime: 0,
-    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const list = (comments || []) as IgComment[];

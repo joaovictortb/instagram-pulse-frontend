@@ -16,6 +16,7 @@ import {
   Cpu,
   CalendarRange,
   Clapperboard,
+  Film,
   Instagram,
   Youtube,
   type LucideIcon,
@@ -38,20 +39,14 @@ const NAV_GROUPS: { id: string; label: string; items: NavItem[] }[] = [
       { name: "Público", href: "/audience", icon: Users },
     ],
   },
-  {
-    id: "growth",
-    label: "Crescimento",
-    items: [
-      { name: "Crescimento IA", href: "/growth-ai", icon: Zap },
-      { name: "Plano 7 dias", href: "/growth-plan", icon: CalendarRange },
-    ],
-  },
+
   {
     id: "tools",
     label: "Ferramentas",
     items: [
       { name: "Orquestrador", href: "/orchestrator", icon: Cpu },
       { name: "Studio", href: "/studio", icon: Clapperboard },
+      { name: "Video Generator", href: "/video-generator", icon: Film },
       // { name: "Instagram", href: "/instagram-connect", icon: Instagram },
       {
         name: "YouTube",

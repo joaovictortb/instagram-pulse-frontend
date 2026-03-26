@@ -15,6 +15,7 @@ import InstagramConnectPage from "@/app/(dashboard)/instagram-connect/page";
 import YoutubeImportPage from "@/app/(dashboard)/youtube-import/page";
 import OrchestratorPage from "@/app/(dashboard)/orchestrator/page";
 import StudioPage from "@/app/(dashboard)/studio/page";
+import VideoGeneratorPage from "@/app/(dashboard)/video-generator/page";
 import LoginPage from "@/app/login/page";
 import Providers from "@/components/Providers";
 import { AuthGuard } from "./components/AuthGuard";
@@ -78,6 +79,10 @@ export default function App() {
             <Route
               path="/studio"
               element={<DashboardLayout children={<StudioPage />} />}
+            />
+            <Route
+              path="/video-generator"
+              element={<DashboardLayout children={<VideoGeneratorPage />} />}
             />
           </Route>
         </Routes>

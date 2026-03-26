@@ -37,12 +37,16 @@ export default function AnalyticsPage() {
     queryKey: ["instagram-account"],
     queryFn: async () =>
       readJsonBody(await apiFetch("/api/instagram/account")),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: media, isLoading } = useQuery({
     queryKey: ["instagram-media"],
     queryFn: async () =>
-      readJsonBody(await apiFetch("/api/instagram/media")),
+      readJsonBody(await apiFetch("/api/instagram/media?limit=200")),
+    staleTime: 2 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const syncMutation = useMutation({

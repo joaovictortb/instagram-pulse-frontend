@@ -61,6 +61,8 @@ export default function SettingsPage() {
     queryKey: ["instagram-account"],
     queryFn: async () =>
       readJsonBody(await apiFetch("/api/instagram/account")),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: health, isLoading: healthLoading } = useQuery({

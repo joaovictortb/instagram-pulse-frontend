@@ -28,6 +28,7 @@ const routeTitles: Record<string, string> = {
   "/growth-plan": "Plano 7 dias",
   "/orchestrator": "Orquestrador",
   "/studio": "",
+  "/video-generator": "Video Generator",
   "/reports": "Relatórios",
   "/instagram-connect": "Instagram",
   "/settings": "Configurações",
@@ -98,9 +99,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         : "API OK"}
               </span>
             </div>
-            <button className="px-4 py-2 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-lg text-sm font-medium transition-colors">
+            {/* <button className="px-4 py-2 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-lg text-sm font-medium transition-colors">
               Generate Report
-            </button>
+            </button> */}
           </div>
         </header>
         <div className="p-8">{children || <Outlet />}</div>

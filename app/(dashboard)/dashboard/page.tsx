@@ -77,12 +77,14 @@ export default function DashboardPage() {
         );
       return data;
     },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: media, isLoading: loadingMedia } = useQuery({
     queryKey: ["instagram-media"],
     queryFn: async () => {
-      const res = await apiFetch("/api/instagram/media");
+      const res = await apiFetch("/api/instagram/media?limit=25");
       const data = await readJsonBody(res);
       if (!res.ok)
         throw new Error(
@@ -90,6 +92,8 @@ export default function DashboardPage() {
         );
       return data;
     },
+    staleTime: 2 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: health } = useQuery({
