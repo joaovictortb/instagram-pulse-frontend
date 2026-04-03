@@ -368,3 +368,87 @@ export async function uploadVideoToCloudinary(
   });
   return { secureUrl, publicId };
 }
+
+/**
+ * URL de entrega Cloudinary (vídeo). `fetch()` a partir do browser costuma falhar
+ * (CORS), então para re-encode/padding use transformações na própria URL.
+ */
+export function isCloudinaryVideoDeliveryUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.protocol === "https:" &&
+      u.hostname.toLowerCase().endsWith("res.cloudinary.com") &&
+      u.pathname.includes("/video/upload/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mesma lógica usada no carrossel após upload: padding no aspecto do feed + MP4,
+ * para o Instagram não cortar vídeo 9:16 de forma agressiva.
+ */
+export function applyInstagramFeedPaddingToCloudinaryVideoUrl(
+  secureUrl: string,
+  width: number,
+  height: number,
+): string {
+  const ar = `${width}:${height}`;
+  let out = secureUrl.replace(
+    "/upload/",
+    `/upload/c_pad,ar_${ar},w_${width},h_${height},b_black,f_mp4/`,
+  );
+  out = out.replace(/\.(webm|mov|mkv|ogg)(\?.*)?$/i, ".mp4$2");
+  return out;
+}
+
+export function isCloudinaryImageDeliveryUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.protocol === "https:" &&
+      u.hostname.toLowerCase().endsWith("res.cloudinary.com") &&
+      u.pathname.includes("/image/upload/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** c_fill ~ object-fit cover no frame do feed, JPEG para o Instagram. */
+export function applyInstagramFeedCoverToCloudinaryImageUrl(
+  secureUrl: string,
+  width: number,
+  height: number,
+): string {
+  return secureUrl.replace(
+    "/upload/",
+    `/upload/c_fill,w_${width},h_${height},g_auto,q_auto:good,f_jpg/`,
+  );
+}
+
+/**
+ * Remove segmentos de transformação on-the-fly do path Cloudinary (`c_pad,.../`)
+ * até ficar em `/video/upload/v…/public_id.mp4`.
+ * O Instagram costuma falhar ao processar (ex. 2207082) URLs com transcodificação
+ * dinâmica ou quando a query string fica demasiado longa no Graph API.
+ */
+export function cloudinaryVideoStorageUrlForInstagram(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.toLowerCase().endsWith("res.cloudinary.com")) return url;
+    let pathname = u.pathname;
+    for (let i = 0; i < 8; i++) {
+      const m = pathname.match(/^(\/[^/]+\/video\/upload\/)([^/]+)\/(.+)$/);
+      if (!m) break;
+      if (/^v\d+$/.test(m[2])) break;
+      pathname = m[1] + m[3];
+    }
+    u.pathname = pathname;
+    return u.toString();
+  } catch {
+    return url;
+  }
+}

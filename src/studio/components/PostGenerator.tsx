@@ -55,6 +55,11 @@ import {
   uploadImageToCloudinary,
   uploadVideoToCloudinary,
   hasCloudinaryConfig,
+  isCloudinaryVideoDeliveryUrl,
+  applyInstagramFeedPaddingToCloudinaryVideoUrl,
+  cloudinaryVideoStorageUrlForInstagram,
+  isCloudinaryImageDeliveryUrl,
+  applyInstagramFeedCoverToCloudinaryImageUrl,
 } from "../lib/cloudinary-upload";
 import {
   fetchEspnArticleContent,
@@ -1098,9 +1103,16 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
   const fetchImageAsDataUrl = (url: string): Promise<string | null> => {
     return new Promise((resolve) => {
       fetch(url, { mode: "cors" })
-        .then((r) =>
-          r.ok ? r.blob() : Promise.reject(new Error(r.statusText)),
-        )
+        .then((r) => {
+          if (r.ok) return r.blob();
+          const msg = `Falha ao baixar imagem (HTTP ${r.status})`;
+          console.warn("[editor-post] fetchImageAsDataUrl:", msg, {
+            status: r.status,
+            statusText: r.statusText,
+            urlPreview: url?.slice(0, 220),
+          });
+          return Promise.reject(new Error(`${msg}${r.statusText ? `: ${r.statusText}` : ""}`));
+        })
         .then((blob) => {
           const reader = new FileReader();
           reader.onloadend = () =>
@@ -1110,6 +1122,29 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
         })
         .catch(() => resolve(null));
     });
+  };
+
+  const asMeaningfulError = (raw: unknown): Error => {
+    if (raw instanceof Error) return raw;
+
+    // Eventos de falha de imagem (ex.: <img onError>) normalmente chegam aqui como Event.
+    if (raw && typeof raw === "object" && "type" in raw) {
+      const evt = raw as { type?: unknown; target?: unknown; srcElement?: unknown };
+      const target = (evt.target ?? evt.srcElement) as unknown;
+      const img = target instanceof HTMLImageElement ? target : null;
+      if (img) {
+        const src = img.currentSrc || img.src || "";
+        const msg =
+          `Falha ao carregar uma imagem necessária para a captura/publicação.` +
+          (src ? ` URL: ${src}` : "");
+        return new Error(msg);
+      }
+      if (typeof evt.type === "string") {
+        return new Error(`Erro de evento durante publicação (${evt.type}).`);
+      }
+    }
+
+    return new Error(String(raw));
   };
 
   const fetchContentFromEspn = async () => {
@@ -1251,6 +1286,23 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     index: number,
   ): Promise<string | null> => {
     try {
+      const { width, height } = getFeedDimensionsForFormat(activeFormat);
+      if (isCloudinaryImageDeliveryUrl(rawUrl)) {
+        console.log(
+          "[editor-post] publishToInstagram: imagem já na Cloudinary; aplicando c_fill na URL (sem fetch).",
+          {
+            index,
+            rawUrlPreview: rawUrl?.slice(0, 120),
+            width,
+            height,
+          },
+        );
+        return applyInstagramFeedCoverToCloudinaryImageUrl(
+          rawUrl,
+          width,
+          height,
+        );
+      }
       console.log(
         "[editor-post] publishToInstagram: espelhando imagem de carrossel na Cloudinary...",
         {
@@ -1272,7 +1324,6 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
 
-      const { width, height } = getFeedDimensionsForFormat(activeFormat);
       const resizedDataUrl = await resizeImageDataUrlTo(
         objectUrl,
         width,
@@ -1307,6 +1358,20 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
     index: number,
   ): Promise<string | null> => {
     try {
+      const { width, height } = getFeedDimensionsForFormat(activeFormat);
+      // Vídeo já na Cloudinary: não dá para refazer fetch no browser (CORS) — só ajusta URL.
+      if (isCloudinaryVideoDeliveryUrl(rawUrl)) {
+        const forIg = cloudinaryVideoStorageUrlForInstagram(rawUrl);
+        console.log(
+          "[editor-post] publishToInstagram: vídeo já na Cloudinary; URL limpa para o Instagram (sem transform on-the-fly).",
+          {
+            index,
+            rawUrlPreview: rawUrl?.slice(0, 120),
+            instagramUrlPreview: forIg.slice(0, 140),
+          },
+        );
+        return forIg;
+      }
       console.log(
         "[editor-post] publishToInstagram: espelhando vídeo de carrossel na Cloudinary...",
         {
@@ -1330,15 +1395,11 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       // Importante: no Feed, vídeos 9:16 costumam ser "zoomados/cortados" pelo Instagram.
       // Para preservar o quadro inteiro, publicamos um vídeo 4:5 (ou 1:1) com padding (barras),
       // mantendo o conteúdo 9:16 inteiro dentro do frame.
-      const { width, height } = getFeedDimensionsForFormat(activeFormat);
-      const ar = `${width}:${height}`;
-      const transformed = upload.secureUrl
-        .replace(
-          "/upload/",
-          `/upload/c_pad,ar_${ar},w_${width},h_${height},b_black,f_mp4/`,
-        )
-        .replace(/\.(webm|mov|mkv|ogg)(\?.*)?$/i, ".mp4$2");
-      return transformed;
+      return applyInstagramFeedPaddingToCloudinaryVideoUrl(
+        upload.secureUrl,
+        width,
+        height,
+      );
     } catch (err) {
       console.error(
         "[editor-post] publishToInstagram: erro ao espelhar vídeo de carrossel na Cloudinary",
@@ -1935,7 +1996,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
         );
       }
     } catch (e) {
-      const err = e instanceof Error ? e : new Error(String(e));
+      const err = asMeaningfulError(e);
       console.error(
         "[editor-post] publishToInstagram: erro (detalhe completo)",
         {
@@ -2274,16 +2335,23 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
   const renderTemplate = () => {
     // No carrossel: primeira imagem do ESPN no template; se temos data URL (captura), usamos para não taintar o canvas.
-    const imageUrl = carouselCaptureImageDataUrl
-      ? carouselCaptureImageDataUrl
-      : replicateHeroImageUrl
-        ? replicateHeroImageUrl
-        : publishAsCarousel && fetchedCarouselMedia.length >= 2
-          ? firstImageUrlFromCarouselMedia(fetchedCarouselMedia) ||
-            article.images?.[0]?.url
-          : article.images?.[0]?.url ||
-            firstImageUrlFromCarouselMedia(fetchedCarouselMedia) ||
-            "https://picsum.photos/seed/nfl/800/800";
+    const pickFirstNonEmptyUrl = (...candidates: Array<string | null | undefined>) => {
+      for (const c of candidates) {
+        const v = typeof c === "string" ? c.trim() : "";
+        if (v) return v;
+      }
+      return "";
+    };
+    const imageUrl =
+      pickFirstNonEmptyUrl(
+        carouselCaptureImageDataUrl,
+        replicateHeroImageUrl,
+        publishAsCarousel && fetchedCarouselMedia.length >= 2
+          ? firstImageUrlFromCarouselMedia(fetchedCarouselMedia)
+          : null,
+        article.images?.[0]?.url,
+        firstImageUrlFromCarouselMedia(fetchedCarouselMedia),
+      ) || "https://picsum.photos/seed/nfl/800/800";
     const team = teamBrand;
     const contractingTeam = selectedTeamForLogo;
 

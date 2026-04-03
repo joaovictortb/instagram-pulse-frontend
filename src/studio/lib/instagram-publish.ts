@@ -309,10 +309,15 @@ async function waitForIgContainerFinished(params: {
           status,
           responseJson: JSON.stringify(data),
         });
+        const st = String(status ?? "");
+        const hint2207082 =
+          st.includes("2207082") || st.includes("2207026")
+            ? " Vídeo no carrossel: use MP4 direto (HTTPS), H.264/AAC; slides de carrossel costumam ter limite de duração (~60s). Evite URLs Cloudinary só com transcodificação on-the-fly."
+            : "";
         throw new Error(
           statusCode === "EXPIRED"
             ? "Um item do carrossel expirou antes de ficar pronto. Tente novamente."
-            : `Um item do carrossel falhou no processamento (${status ?? "ERROR"}). Verifique URLs públicas de imagem/vídeo.`,
+            : `Um item do carrossel falhou no processamento (${status ?? "ERROR"}). Verifique URLs públicas, formato e tamanho do ficheiro.${hint2207082}`,
         );
       }
       if (pollIndex === 0 || pollIndex % 5 === 0) {
@@ -792,16 +797,30 @@ export async function publishCarouselToInstagram(params: {
   });
 
   const childIds: string[] = [];
+  const mediaEndpoint = `${GRAPH_API_BASE}/${accountId}/media`;
   for (let i = 0; i < valid.length; i++) {
     const item = valid[i];
-    const createUrl =
+    // video_url no corpo (form) — na query string, URLs longas (ex. Cloudinary com transforms)
+    // truncam ou falham no processamento na Meta (ex. status 2207082).
+    const fields: Record<string, string> =
       item.kind === "video"
-        ? `${GRAPH_API_BASE}/${accountId}/media?media_type=VIDEO&video_url=${encodeURIComponent(item.url)}&is_carousel_item=true&access_token=${encodeURIComponent(accessToken)}`
-        : `${GRAPH_API_BASE}/${accountId}/media?image_url=${encodeURIComponent(item.url)}&is_carousel_item=true&access_token=${encodeURIComponent(accessToken)}`;
-    const { ok: childOk, data: createData } = await graphPostJsonWithRetry(
-      createUrl,
-      `Carrossel item ${i + 1}/${valid.length}`,
-    );
+        ? {
+            media_type: "VIDEO",
+            video_url: item.url,
+            is_carousel_item: "true",
+            access_token: accessToken,
+          }
+        : {
+            image_url: item.url,
+            is_carousel_item: "true",
+            access_token: accessToken,
+          };
+    const { ok: childOk, data: createData } =
+      await graphPostFormUrlEncodedWithRetry(
+        mediaEndpoint,
+        fields,
+        `Carrossel item ${i + 1}/${valid.length}`,
+      );
     if (!childOk && isTokenExpiredError(createData)) {
       throw new Error(
         "Token do Instagram expirado. Vá em Perfil > Instagram e reconecte a conta.",
@@ -840,7 +859,6 @@ export async function publishCarouselToInstagram(params: {
   await new Promise((r) => setTimeout(r, 1500));
 
   const childrenParam = childIds.join(",");
-  const mediaEndpoint = `${GRAPH_API_BASE}/${accountId}/media`;
   const { ok: parentOk, data: parentData } =
     await graphPostFormUrlEncodedWithRetry(
       mediaEndpoint,
