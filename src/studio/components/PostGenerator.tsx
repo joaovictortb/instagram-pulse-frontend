@@ -7372,7 +7372,10 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   <span className="block text-[9px] font-bold uppercase tracking-[0.4em] text-black/50">
                     NFL Annual
                   </span>
-                  <span className="block text-3xl font-black text-black leading-none tracking-tighter">
+                  <span
+                    className="block font-black text-black leading-none tracking-tighter"
+                    style={{ fontSize: `${badgeSize}px` }}
+                  >
                     {badgeText}
                   </span>
                 </div>
@@ -7790,9 +7793,6 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               style={{ opacity: overlayMult }}
             />
             <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-md bg-red-600 border-2 border-white shadow-lg">
-              <span className="text-white text-lg font-black leading-none">
-                +
-              </span>
               <span className="text-white text-[10px] font-black uppercase tracking-widest">
                 {badgeText}
               </span>
@@ -7824,9 +7824,6 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   style={{ width: logoPx(40), height: logoPx(40) }}
                   initialsSize="xs"
                 />
-                <span className="text-[9px] font-mono uppercase text-white/45">
-                  Injury report
-                </span>
               </div>
             </div>
           </div>
@@ -8535,13 +8532,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
       case "COMBINE_TRACK":
         return (
           <div className="relative w-full h-full overflow-hidden bg-zinc-950">
-            <div
-              className="absolute inset-0 pointer-events-none opacity-[0.12] z-[1]"
-              style={{
-                backgroundImage:
-                  "repeating-linear-gradient(105deg, #22d3ee 0, #22d3ee 2px, transparent 2px, transparent 36px), repeating-linear-gradient(105deg, #a3e635 0, #a3e635 1px, transparent 1px, transparent 36px)",
-              }}
-            />
+            <div className="absolute inset-0 pointer-events-none opacity-[0.12] z-[1]" />
             <img
               src={imageUrl}
               alt=""
@@ -8573,9 +8564,6 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               <div className="flex items-baseline gap-2 mb-1">
                 <span className="text-lime-400 text-[10px] font-mono font-black tracking-widest uppercase">
                   {badgeText}
-                </span>
-                <span className="text-[9px] font-mono text-cyan-300/70">
-                  40 · vert · shuttle
                 </span>
               </div>
               <h2
@@ -9535,8 +9523,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
             <div
               className="absolute -left-[15%] top-[1%] w-[130%] h-24 z-[2] rotate-[-8deg] pointer-events-none opacity-90"
               style={{
-                background:
-                  `linear-gradient(90deg, transparent 0%, ${rgbaFromHex(team.primary, 0.85)} 35%, ${rgbaFromHex(team.secondary, 0.6)} 50%, transparent 85%)`,
+                background: `linear-gradient(90deg, transparent 0%, ${rgbaFromHex(team.primary, 0.85)} 35%, ${rgbaFromHex(team.secondary, 0.6)} 50%, transparent 85%)`,
                 filter: "blur(16px)",
               }}
             />
