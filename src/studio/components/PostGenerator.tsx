@@ -2692,6 +2692,23 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
 
     const marginPx = textMargin;
     const logoPx = (base: number) => Math.round((base * teamLogoScale) / 100);
+    const rgbaFromHex = (hex: string, alpha: number) => {
+      const raw = hex.replace("#", "").trim();
+      const normalized =
+        raw.length === 3
+          ? raw
+              .split("")
+              .map((c) => c + c)
+              .join("")
+          : raw;
+      if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
+        return `rgba(255,255,255,${alpha})`;
+      }
+      const r = parseInt(normalized.slice(0, 2), 16);
+      const g = parseInt(normalized.slice(2, 4), 16);
+      const b = parseInt(normalized.slice(4, 6), 16);
+      return `rgba(${r},${g},${b},${alpha})`;
+    };
     /** 0 = foto sem escurecimento, 1 = intensidade máxima do overlay (como no design original). */
     const overlayMult = imageOverlayOpacity / 100;
 
@@ -9519,7 +9536,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               className="absolute -left-[15%] top-[1%] w-[130%] h-24 z-[2] rotate-[-8deg] pointer-events-none opacity-90"
               style={{
                 background:
-                  "linear-gradient(90deg, transparent 0%, rgba(217,70,239,0.85) 35%, rgba(244,114,182,0.6) 50%, transparent 85%)",
+                  `linear-gradient(90deg, transparent 0%, ${rgbaFromHex(team.primary, 0.85)} 35%, ${rgbaFromHex(team.secondary, 0.6)} 50%, transparent 85%)`,
                 filter: "blur(16px)",
               }}
             />
@@ -9541,7 +9558,13 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               className="absolute bottom-0 left-0 right-0 z-10"
               style={{ padding: `${marginPx}px` }}
             >
-              <span className="block text-[10px] font-black uppercase tracking-[0.5em] text-fuchsia-400 mb-2 drop-shadow-[0_0_12px_rgba(217,70,239,0.8)]">
+              <span
+                className="block text-[10px] font-black uppercase tracking-[0.5em] mb-2"
+                style={{
+                  color: team.primary,
+                  filter: `drop-shadow(0 0 12px ${rgbaFromHex(team.primary, 0.8)})`,
+                }}
+              >
                 {badgeText}
               </span>
               <h2
@@ -9551,15 +9574,18 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                 )}
                 style={{
                   ...headlineStyles,
-                  textShadow: "0 0 20px rgba(217,70,239,0.45)",
+                  textShadow: `0 0 20px ${rgbaFromHex(team.primary, 0.45)}`,
                 }}
               >
                 {headline}
               </h2>
               {subtext ? (
                 <p
-                  className="mt-3 text-fuchsia-100/75 text-xs leading-relaxed max-w-[96%]"
-                  style={subtextStyles}
+                  className="mt-3 text-xs leading-relaxed max-w-[96%]"
+                  style={{
+                    ...subtextStyles,
+                    color: rgbaFromHex(team.primary, 0.75),
+                  }}
                 >
                   {subtext}
                 </p>
