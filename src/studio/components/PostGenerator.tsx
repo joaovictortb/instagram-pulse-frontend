@@ -8107,9 +8107,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               className="absolute inset-0 flex flex-col justify-end z-10"
               style={{ padding: `${marginPx}px` }}
             >
-              <p className="text-xs font-serif italic text-amber-200/90 mb-2 tracking-wide">
+              {/* <p className="text-xs font-serif italic text-amber-200/90 mb-2 tracking-wide">
                 {badgeText}
-              </p>
+              </p> */}
               <h2
                 className={cn(
                   "text-white font-black leading-snug",
@@ -8134,7 +8134,7 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
                   initialsSize="xs"
                 />
                 <span className="text-[9px] uppercase tracking-[0.3em] text-white/35">
-                  Locker room
+                  {badgeText}
                 </span>
               </div>
             </div>
