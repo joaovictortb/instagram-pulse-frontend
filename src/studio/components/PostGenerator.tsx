@@ -8107,9 +8107,9 @@ export const PostGenerator: React.FC<PostGeneratorProps> = ({
               className="absolute inset-0 flex flex-col justify-end z-10"
               style={{ padding: `${marginPx}px` }}
             >
-              {/* <p className="text-xs font-serif italic text-amber-200/90 mb-2 tracking-wide">
-                {badgeText}
-              </p> */}
+              <p className="text-xs font-serif italic text-amber-200/90 mb-2 tracking-wide">
+                INSIDER
+              </p>
               <h2
                 className={cn(
                   "text-white font-black leading-snug",
